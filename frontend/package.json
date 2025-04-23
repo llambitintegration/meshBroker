@@ -1,0 +1,12 @@
+{
+  "name": "meshtastic-mqtt-bridge-frontend",
+  "version": "1.0.0",
+  "description": "Frontend for Meshtastic MQTT Bridge",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {},
+  "author": "",
+  "license": "MIT"
+}
