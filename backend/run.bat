@@ -1,0 +1,3 @@
+@echo off
+echo Starting Meshtastic MQTT Bridge Backend...
+python run.py %* 

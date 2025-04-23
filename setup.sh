@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Setup script for Meshtastic MQTT Bridge
-# This script installs and configures all the necessary components
+# This script installs and configures all the necessary components for Windows 11
 
 set -e
 
@@ -18,133 +18,106 @@ print_error() {
     echo -e "\e[1;31m[ERROR]\e[0m $1"
 }
 
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then
-    print_error "Please run as root"
+# Check if running with administrator privileges
+if ! net session &>/dev/null; then
+    print_error "Please run as administrator (right-click, Run as administrator)"
     exit 1
 fi
 
-# Update system packages
-print_info "Updating system packages..."
-apt-get update
-apt-get upgrade -y
+# Install Chocolatey package manager if not already installed
+print_info "Checking for Chocolatey package manager..."
+if ! command -v choco &>/dev/null; then
+    print_info "Installing Chocolatey package manager..."
+    powershell -Command "Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))"
+fi
 
-# Install required packages
+# Install required packages using Chocolatey
 print_info "Installing required packages..."
-apt-get install -y \
-    mosquitto \
-    mosquitto-clients \
-    python3 \
-    python3-pip \
-    python3-venv \
-    nodejs \
-    npm \
-    curl
+choco install -y mosquitto python nodejs npm
+
+# Add Python and npm to PATH for this session
+export PATH="$PATH:/c/Program Files/Python310:/c/Program Files/Python310/Scripts:/c/Program Files/nodejs"
 
 # Create directories for logs
 print_info "Creating log directories..."
-mkdir -p /var/log/mosquitto
-chown mosquitto:mosquitto /var/log/mosquitto
+mkdir -p "/c/ProgramData/mosquitto/log"
 
 # Create directory for mosquitto persistence
 print_info "Creating persistence directory..."
-mkdir -p /var/lib/mosquitto
-chown mosquitto:mosquitto /var/lib/mosquitto
+mkdir -p "/c/ProgramData/mosquitto/data"
 
 # Copy Mosquitto configuration
 print_info "Configuring Mosquitto..."
-cp /mosquitto/mosquitto.conf /etc/mosquitto/conf.d/meshtastic.conf
-chown root:root /etc/mosquitto/conf.d/meshtastic.conf
-chmod 644 /etc/mosquitto/conf.d/meshtastic.conf
+cp "/mosquitto/mosquitto.conf" "/c/Program Files/mosquitto/mosquitto.conf"
 
-# Restart Mosquitto service
-print_info "Restarting Mosquitto service..."
-systemctl restart mosquitto
-systemctl enable mosquitto
+# Start Mosquitto service
+print_info "Starting Mosquitto service..."
+net start mosquitto
+sc config mosquitto start= auto
 
 # Set up Python virtual environment for the backend
 print_info "Setting up Python virtual environment for backend..."
-mkdir -p /opt/meshtastic-mqtt-bridge
-cd /opt/meshtastic-mqtt-bridge
+mkdir -p "/c/Program Files/meshtastic-mqtt-bridge"
+cd "/c/Program Files/meshtastic-mqtt-bridge"
 
-python3 -m venv venv
-source venv/bin/activate
+python -m venv venv
+source venv/Scripts/activate
 
 # Install Python packages
 pip install fastapi uvicorn paho-mqtt
 
 # Copy backend files
 print_info "Copying backend files..."
-mkdir -p /opt/meshtastic-mqtt-bridge/backend
-cp /backend/* /opt/meshtastic-mqtt-bridge/backend/
+mkdir -p "/c/Program Files/meshtastic-mqtt-bridge/backend"
+cp /backend/* "/c/Program Files/meshtastic-mqtt-bridge/backend/"
 
-# Create a systemd service for the FastAPI backend
-print_info "Creating systemd service for backend..."
-cat > /etc/systemd/system/meshtastic-mqtt-backend.service << EOF
-[Unit]
-Description=Meshtastic MQTT Bridge Backend
-After=network.target mosquitto.service
-
-[Service]
-User=root
-WorkingDirectory=/opt/meshtastic-mqtt-bridge
-ExecStart=/opt/meshtastic-mqtt-bridge/venv/bin/python3 /opt/meshtastic-mqtt-bridge/backend/app.py
-Restart=always
-Environment="PYTHONPATH=/opt/meshtastic-mqtt-bridge"
-
-[Install]
-WantedBy=multi-user.target
-EOF
+# Create a Windows service for the FastAPI backend using NSSM
+print_info "Creating Windows service for backend..."
+choco install -y nssm
+nssm install MeshtasticMQTTBackend "/c/Program Files/meshtastic-mqtt-bridge/venv/Scripts/python.exe" "/c/Program Files/meshtastic-mqtt-bridge/backend/app.py"
+nssm set MeshtasticMQTTBackend AppDirectory "/c/Program Files/meshtastic-mqtt-bridge"
+nssm set MeshtasticMQTTBackend AppEnvironmentExtra "PYTHONPATH=/c/Program Files/meshtastic-mqtt-bridge"
+nssm set MeshtasticMQTTBackend Start SERVICE_AUTO_START
+nssm set MeshtasticMQTTBackend ObjectName LocalSystem
 
 # Set up Node.js frontend
 print_info "Setting up Node.js frontend..."
-mkdir -p /opt/meshtastic-mqtt-bridge/frontend
-cp -r /frontend/* /opt/meshtastic-mqtt-bridge/frontend/
+mkdir -p "/c/Program Files/meshtastic-mqtt-bridge/frontend"
+cp -r /frontend/* "/c/Program Files/meshtastic-mqtt-bridge/frontend/"
 
 # Install Node.js dependencies
-cd /opt/meshtastic-mqtt-bridge/frontend
+cd "/c/Program Files/meshtastic-mqtt-bridge/frontend"
 npm install express
 
-# Create a systemd service for the Node.js frontend
-print_info "Creating systemd service for frontend..."
-cat > /etc/systemd/system/meshtastic-mqtt-frontend.service << EOF
-[Unit]
-Description=Meshtastic MQTT Bridge Frontend
-After=network.target
+# Create a Windows service for the Node.js frontend using NSSM
+print_info "Creating Windows service for frontend..."
+nssm install MeshtasticMQTTFrontend "C:\Program Files\nodejs\node.exe" "/c/Program Files/meshtastic-mqtt-bridge/frontend/server.js"
+nssm set MeshtasticMQTTFrontend AppDirectory "/c/Program Files/meshtastic-mqtt-bridge/frontend"
+nssm set MeshtasticMQTTFrontend AppEnvironmentExtra "PORT=5000"
+nssm set MeshtasticMQTTFrontend Start SERVICE_AUTO_START
+nssm set MeshtasticMQTTFrontend ObjectName LocalSystem
 
-[Service]
-User=root
-WorkingDirectory=/opt/meshtastic-mqtt-bridge/frontend
-ExecStart=/usr/bin/node /opt/meshtastic-mqtt-bridge/frontend/server.js
-Restart=always
-Environment="PORT=5000"
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Enable and start services
-print_info "Enabling and starting services..."
-systemctl daemon-reload
-systemctl enable meshtastic-mqtt-backend.service
-systemctl enable meshtastic-mqtt-frontend.service
-systemctl start meshtastic-mqtt-backend.service
-systemctl start meshtastic-mqtt-frontend.service
+# Start services
+print_info "Starting services..."
+nssm start MeshtasticMQTTBackend
+nssm start MeshtasticMQTTFrontend
 
 # Check if services are running
 print_info "Checking service status..."
-if systemctl is-active --quiet mosquitto && \
-   systemctl is-active --quiet meshtastic-mqtt-backend.service && \
-   systemctl is-active --quiet meshtastic-mqtt-frontend.service; then
+backend_status=$(sc query MeshtasticMQTTBackend | grep STATE | grep RUNNING)
+frontend_status=$(sc query MeshtasticMQTTFrontend | grep STATE | grep RUNNING)
+mosquitto_status=$(sc query mosquitto | grep STATE | grep RUNNING)
+
+if [ -n "$backend_status" ] && [ -n "$frontend_status" ] && [ -n "$mosquitto_status" ]; then
     print_success "All services are running!"
     echo ""
-    echo "Meshtastic MQTT Bridge is now installed and running."
+    echo "Meshtastic MQTT Bridge is now installed and running on Windows 11."
     echo "Frontend: http://localhost:5000"
     echo "Backend API: http://localhost:8000"
     echo "MQTT Broker: localhost:1883"
 else
-    print_error "Some services failed to start. Please check the logs with:"
-    echo "journalctl -u mosquitto.service"
-    echo "journalctl -u meshtastic-mqtt-backend.service"
-    echo "journalctl -u meshtastic-mqtt-frontend.service"
+    print_error "Some services failed to start. Please check the Windows Event Viewer for details."
+    echo "You can also check service status with: sc query MeshtasticMQTTBackend"
+    echo "sc query MeshtasticMQTTFrontend"
+    echo "sc query mosquitto"
 fi

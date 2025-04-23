@@ -1,6 +1,7 @@
 import logging
 import json
 import asyncio
+import time
 from typing import Dict, List, Optional, Any
 
 # Configure logging
@@ -61,6 +62,13 @@ async def process_meshtastic_message(topic: str, payload: Any):
             logger.warning(f"Failed to parse JSON from topic {topic}: {payload}")
             return
         
+        # Get the current time safely
+        try:
+            current_time = asyncio.get_running_loop().time()
+        except RuntimeError:
+            # Fallback if no running loop
+            current_time = time.time()
+        
         # Extract node ID from topic
         # Topic format: msh/{node_id}/json/{message_type}
         parts = topic.split('/')
@@ -72,13 +80,13 @@ async def process_meshtastic_message(topic: str, payload: Any):
             if node_id not in meshtastic_nodes:
                 meshtastic_nodes[node_id] = {
                     "node_id": node_id,
-                    "last_seen": asyncio.get_event_loop().time(),
+                    "last_seen": current_time,
                     "message_count": 0,
                 }
             
             # Update node data based on message type
             node = meshtastic_nodes[node_id]
-            node["last_seen"] = asyncio.get_event_loop().time()
+            node["last_seen"] = current_time
             node["message_count"] += 1
             
             if message_type == "nodeid" and "user" in data:
@@ -133,7 +141,7 @@ def send_message_to_node(mqtt_handler, target_node_id, message, source_node_id=N
             "text": message,
             "from": source_node_id or "mqtt-bridge",
             "to": target_node_id,
-            "time": int(asyncio.get_event_loop().time())
+            "time": int(time.time())
         }
     }
     return mqtt_handler.publish(topic, json.dumps(payload))
@@ -146,7 +154,7 @@ def broadcast_message(mqtt_handler, message, source_node_id=None):
             "text": message,
             "from": source_node_id or "mqtt-bridge",
             "to": "^all",
-            "time": int(asyncio.get_event_loop().time())
+            "time": int(time.time())
         }
     }
     return mqtt_handler.publish(topic, json.dumps(payload))
