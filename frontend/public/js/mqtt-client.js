@@ -6,10 +6,10 @@
 class MQTTClient {
   constructor() {
     // API base URL
-    this.apiBaseUrl = 'http://localhost:8000';
+    this.apiBaseUrl = 'http://127.0.0.1:8000';
     
     // WebSocket URL
-    this.wsUrl = 'ws://localhost:8000/ws';
+    this.wsUrl = 'ws://127.0.0.1:8000/ws';
     
     // WebSocket connection
     this.ws = null;
