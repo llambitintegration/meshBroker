@@ -1,5 +1,5 @@
 import os
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     """Application settings"""
@@ -21,8 +21,9 @@ class Settings(BaseSettings):
     # CORS settings
     CORS_ORIGINS: list = ["*"]  # Wide open for local development
     
-    class Config:
-        env_file = ".env"
+    model_config = {
+        "env_file": ".env"
+    }
 
 # Create settings instance
 settings = Settings()
