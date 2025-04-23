@@ -2,7 +2,7 @@ modules = ["python-3.11", "nodejs-20"]
 
 [nix]
 channel = "stable-24_05"
-packages = ["libxcrypt"]
+packages = ["libxcrypt", "mosquitto"]
 
 [workflows]
 runButton = "Project"
