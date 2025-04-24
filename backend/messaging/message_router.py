@@ -3,16 +3,7 @@ Router for dispatching messages to appropriate handlers
 """
 import re
 import logging
-from typing import Dict, Any, List, Optional, Pattern, Callable, Awaitable
-
-from backend.message_handlers.meshtastic_handlers import (
-    NodeInfoHandler,
-    PositionHandler,
-    TextMessageHandler,
-    TelemetryHandler,
-    HeartbeatHandler,
-    BinaryMessageHandler
-)
+from typing import Dict, Any, List, Pattern, Callable, Awaitable
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -22,23 +13,8 @@ class MessageRouter:
     
     def __init__(self):
         """Initialize the router with handlers for different message types"""
-        # Initialize message handlers
-        self.node_info_handler = NodeInfoHandler()
-        self.position_handler = PositionHandler()
-        self.text_message_handler = TextMessageHandler()
-        self.telemetry_handler = TelemetryHandler()
-        self.heartbeat_handler = HeartbeatHandler()
-        self.binary_message_handler = BinaryMessageHandler()
-        
         # Define topic patterns and their handlers
-        self.routes: Dict[Pattern, Callable[[str, Any], Awaitable[bool]]] = {
-            re.compile(r"msh/[^/]+/json/nodeid"): self.node_info_handler.handle,
-            re.compile(r"msh/[^/]+/json/position"): self.position_handler.handle,
-            re.compile(r"msh/[^/]+/json/text"): self.text_message_handler.handle,
-            re.compile(r"msh/[^/]+/json/telemetry"): self.telemetry_handler.handle,
-            re.compile(r"msh/[^/]+/json/heartbeat"): self.heartbeat_handler.handle,
-            re.compile(r"msh/[^/]+/binary"): self.binary_message_handler.handle,
-        }
+        self.routes: Dict[Pattern, Callable[[str, Any], Awaitable[bool]]] = {}
         
         # Custom routes for additional handlers
         self.custom_routes: Dict[Pattern, Callable[[str, Any], Awaitable[bool]]] = {}
@@ -78,4 +54,4 @@ class MessageRouter:
             "msh/+/json/telemetry",
             "msh/+/json/heartbeat",
             "msh/+/binary"
-        ] 
+        ]

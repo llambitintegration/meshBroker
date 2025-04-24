@@ -213,4 +213,4 @@ class MessageProcessor:
         
         # Use default chain if no specific chain matches
         logger.debug(f"Processing message on topic '{topic}' with default chain")
-        return self.default_chain.process(topic, payload) 
+        return self.default_chain.process(topic, payload)

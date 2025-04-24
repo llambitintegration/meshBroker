@@ -13,8 +13,17 @@
   <!-- Font Awesome -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.2.1/css/all.min.css" rel="stylesheet">
   
+  <!-- Leaflet Map CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  
   <!-- Custom styles -->
   <link rel="stylesheet" href="css/styles.css">
+  
+  <!-- Leaflet Map JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  
+  <!-- Chart.js for visualizations -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
   <div class="container-fluid">
@@ -40,6 +49,9 @@
             </li>
             <li class="nav-item">
               <a class="nav-link" href="#" data-page="mqtt-explorer">MQTT Explorer</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="#" data-page="map">Map</a>
             </li>
           </ul>
           <div class="d-flex">
@@ -297,6 +309,100 @@
           </div>
         </div>
       </div>
+      
+      <!-- Map Page -->
+      <div id="map-page" class="page">
+        <div class="row">
+          <div class="col-md-9">
+            <div class="card mb-4">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                  <i class="fas fa-map-marked-alt me-2"></i>Node Map
+                </h5>
+                <div class="btn-group" role="group">
+                  <button id="refresh-map" class="btn btn-sm btn-outline-primary">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                  </button>
+                  <button id="center-map" class="btn btn-sm btn-outline-secondary">
+                    <i class="fas fa-compress-arrows-alt"></i> Center
+                  </button>
+                </div>
+              </div>
+              <div class="card-body">
+                <div id="node-map-container" style="height: 600px;">
+                  <!-- Map will be inserted here by JavaScript -->
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="col-md-3">
+            <div class="card mb-4">
+              <div class="card-header">
+                <h5 class="card-title mb-0">
+                  <i class="fas fa-layer-group me-2"></i>Map Settings
+                </h5>
+              </div>
+              <div class="card-body">
+                <div class="mb-3">
+                  <label class="form-label">Base Map</label>
+                  <select id="map-style" class="form-select">
+                    <option value="streets">Streets</option>
+                    <option value="satellite">Satellite</option>
+                    <option value="terrain">Terrain</option>
+                    <option value="dark">Dark</option>
+                  </select>
+                </div>
+                
+                <div class="mb-3">
+                  <label class="form-label">Show Node Data</label>
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="show-labels" checked>
+                    <label class="form-check-label" for="show-labels">Node Labels</label>
+                  </div>
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="show-paths" checked>
+                    <label class="form-check-label" for="show-paths">Node Paths</label>
+                  </div>
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="show-signal" checked>
+                    <label class="form-check-label" for="show-signal">Signal Strength</label>
+                  </div>
+                </div>
+                
+                <hr>
+                
+                <div class="mb-3">
+                  <label class="form-label">Map Tools</label>
+                  <div class="d-grid gap-2">
+                    <button id="measure-distance" class="btn btn-sm btn-outline-primary">
+                      <i class="fas fa-ruler"></i> Measure Distance
+                    </button>
+                    <button id="add-geofence" class="btn btn-sm btn-outline-primary">
+                      <i class="fas fa-draw-polygon"></i> Add Geofence
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <div class="card mb-4">
+              <div class="card-header">
+                <h5 class="card-title mb-0">
+                  <i class="fas fa-info-circle me-2"></i>Selected Node
+                </h5>
+              </div>
+              <div class="card-body">
+                <div id="selected-node-info">
+                  <div class="alert alert-info">
+                    Select a node on the map to view its details
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -321,11 +427,9 @@
   <!-- Bootstrap JS Bundle -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
   
-  <!-- Chart.js -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
-  
   <!-- Custom scripts -->
   <script src="js/mqtt-client.js"></script>
   <script src="js/dashboard.js"></script>
+  <script src="js/map.js"></script>
 </body>
 </html>

@@ -248,88 +248,64 @@ class MessageDeliveryTracker:
         while self._running:
             time.sleep(self.cleanup_interval)
             self._cleanup_old_entries()
-            self.check_expired_messages()
-            self.process_retries()
     
     def _cleanup_old_entries(self, max_age: float = 3600.0):
-        """Remove old completed entries"""
+        """Remove old completed message entries"""
+        current_time = time.time()
+        
         with self._lock:
-            current_time = time.time()
-            cutoff_time = current_time - max_age
-            
-            # Remove old completed entries
-            old_entries = [
-                msg_id for msg_id, info in self.completed.items()
-                if info.get("completion_time", 0) < cutoff_time
-            ]
-            
-            for msg_id in old_entries:
-                del self.completed[msg_id]
-            
-            if old_entries:
-                logger.debug(f"Cleaned up {len(old_entries)} old delivery tracking entries")
+            # Clean up completed messages older than max_age
+            for message_id in list(self.completed.keys()):
+                msg_info = self.completed[message_id]
+                age = current_time - msg_info["completion_time"]
+                
+                if age > max_age:
+                    del self.completed[message_id]
 
 
 class QoSHandler:
-    """Handles MQTT QoS logic"""
+    """Handles MQTT QoS levels and message delivery guarantees"""
     
     def __init__(self, delivery_tracker: MessageDeliveryTracker):
         """Initialize QoS handler
         
         Args:
-            delivery_tracker: Message delivery tracker instance
+            delivery_tracker: MessageDeliveryTracker instance for tracking message delivery
         """
         self.delivery_tracker = delivery_tracker
-        
-        # Map of QoS levels to their names for logging
-        self.qos_names = {
-            0: "At most once",
-            1: "At least once",
-            2: "Exactly once"
-        }
     
     def prepare_publish(self, topic: str, payload: Any, qos: int, retain: bool) -> Tuple[int, Any]:
         """Prepare a message for publishing with appropriate QoS handling
         
         Args:
-            topic: Message topic
+            topic: MQTT topic
             payload: Message payload
             qos: QoS level (0, 1, or 2)
-            retain: Retain flag
+            retain: Whether to retain the message
             
         Returns:
-            Tuple[int, Any]: Message ID and payload
+            Tuple[int, Any]: message_id and possibly modified payload
         """
-        # Validate QoS level
-        if qos not in (0, 1, 2):
-            logger.warning(f"Invalid QoS level {qos}, defaulting to 0")
-            qos = 0
-        
-        # Log QoS level
-        logger.debug(f"Preparing message for topic {topic} with QoS {qos} ({self.qos_names.get(qos, 'Unknown')})")
-        
-        # For QoS 0, no tracking needed
+        # For QoS 0, no special handling needed
         if qos == 0:
             return 0, payload
         
-        # For QoS 1 and 2, generate message ID and track the message
+        # For QoS 1 and 2, we need a message ID
         message_id = self.delivery_tracker.next_message_id()
+        
+        # Start tracking the message
         self.delivery_tracker.track_message(message_id, topic, payload, qos, retain)
         
         return message_id, payload
     
     def handle_publish_ack(self, message_id: int):
-        """Handle PUBACK message (QoS 1 acknowledgment)"""
-        logger.debug(f"Received PUBACK for message {message_id}")
-        self.delivery_tracker.message_ack(message_id, "delivered")
+        """Handle PUBACK message for QoS 1"""
+        self.delivery_tracker.message_ack(message_id)
     
     def handle_publish_received(self, message_id: int):
-        """Handle PUBREC message (first part of QoS 2 flow)"""
-        logger.debug(f"Received PUBREC for message {message_id}")
+        """Handle PUBREC message for QoS 2"""
         self.delivery_tracker.message_received(message_id)
-        # PUBREL will be sent by MQTT client
     
     def handle_publish_complete(self, message_id: int):
-        """Handle PUBCOMP message (final part of QoS 2 flow)"""
-        logger.debug(f"Received PUBCOMP for message {message_id}")
-        self.delivery_tracker.message_ack(message_id, "delivered") 
+        """Handle PUBCOMP message for QoS 2"""
+        self.delivery_tracker.message_ack(message_id)

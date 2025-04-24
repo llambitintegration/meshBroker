@@ -6,7 +6,7 @@ import os
 from typing import Dict, List, Optional, Any
 
 from backend.models.meshtastic_node import MeshtasticNode, Message, Position
-from backend.message_router import MessageRouter
+from backend.messaging.message_router import MessageRouter
 
 # Configure logging
 logging.basicConfig(

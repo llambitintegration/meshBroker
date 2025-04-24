@@ -397,4 +397,4 @@ class MQTTBrokerMonitor:
             return
         
         # Otherwise, some are degraded
-        self.overall_status = BrokerStatus.DEGRADED 
+        self.overall_status = BrokerStatus.DEGRADED

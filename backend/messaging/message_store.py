@@ -248,5 +248,6 @@ class MessageStore:
         max_delay = 300  # 5 minutes max
         delay = min(base_delay * (2 ** retry_count), max_delay)
         # Add jitter (±20%)
-        jitter = delay * 0.2 * (random.random() * 2 - 1)
-        return time.time() + delay + jitter 
+        jitter = delay * 0.2
+        delay += random.uniform(-jitter, jitter)
+        return time.time() + max(delay, 0.1)  # Ensure positive delay

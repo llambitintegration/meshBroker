@@ -253,45 +253,43 @@ class MessageQueue:
                 logger.error(f"Error in message handler {handler.__name__}: {e}")
     
     def _stats_monitor(self):
-        """Monitor and log queue statistics"""
+        """Thread to periodically log and reset stats"""
+        log_interval = 60  # Log stats every 60 seconds
+        
         while self.running:
-            time.sleep(60)  # Log stats every minute
-            try:
-                stats = self.get_stats()
-                current_time = time.time()
-                time_diff = current_time - self._last_stats_time
-                
-                # Calculate rates
-                enqueue_rate = stats["enqueued"] / time_diff if time_diff > 0 else 0
-                dequeue_rate = stats["dequeued"] / time_diff if time_diff > 0 else 0
-                
-                logger.info(
-                    f"Queue stats: size={stats['queue_size']}, "
-                    f"enqueued={stats['enqueued']} ({enqueue_rate:.1f}/s), "
-                    f"dequeued={stats['dequeued']} ({dequeue_rate:.1f}/s), "
-                    f"dropped={stats['dropped']}, "
-                    f"avg_processing_time={stats['avg_processing_time']*1000:.2f}ms"
-                )
-                
-                # Reset stats for rate calculation
-                self._last_stats_time = current_time
-                
-            except Exception as e:
-                logger.error(f"Error in stats monitor: {e}")
+            time.sleep(1.0)
+            
+            current_time = time.time()
+            if current_time - self._last_stats_time >= log_interval:
+                with self._lock:
+                    # Log stats
+                    stats = self.get_stats()
+                    logger.info(
+                        f"Message queue stats: enqueued={stats['enqueued']}, "
+                        f"dequeued={stats['dequeued']}, dropped={stats['dropped']}, "
+                        f"queue_size={stats['queue_size']}, "
+                        f"avg_processing_time={stats['avg_processing_time']:.6f}s"
+                    )
+                    
+                    # Reset some stats
+                    self.stats["processing_time"] = 0
+                    self.stats["processing_count"] = 0
+                    
+                    self._last_stats_time = current_time
 
 
 class FlowController:
-    """Controls message flow based on queue statistics"""
+    """Controls message flow based on queue size"""
     
     def __init__(self, message_queue: MessageQueue, high_watermark: float = 0.8, 
                 low_watermark: float = 0.6, check_interval: float = 1.0):
         """Initialize flow controller
         
         Args:
-            message_queue: The message queue to monitor
-            high_watermark: Percentage of queue fullness to trigger throttling
-            low_watermark: Percentage of queue fullness to resume normal flow
-            check_interval: How often to check queue status (in seconds)
+            message_queue: The MessageQueue to monitor
+            high_watermark: Ratio of queue capacity that triggers throttling (0.0-1.0)
+            low_watermark: Ratio of queue capacity that disables throttling (0.0-1.0)
+            check_interval: How often to check queue size in seconds
         """
         self.message_queue = message_queue
         self.high_watermark = high_watermark
@@ -299,90 +297,90 @@ class FlowController:
         self.check_interval = check_interval
         self.throttling = False
         self.running = False
-        self._flow_listeners: List[Callable[[bool], None]] = []
-        self._monitor_thread = None
+        self.monitor_thread = None
+        self.listeners: List[Callable[[bool], None]] = []
     
     def start(self):
-        """Start the flow controller"""
+        """Start flow control monitoring"""
         if self.running:
             logger.warning("Flow controller already running")
             return
         
         self.running = True
-        self._monitor_thread = threading.Thread(
+        self.monitor_thread = threading.Thread(
             target=self._monitor_loop,
-            name="FlowControllerMonitor",
+            name="FlowControlMonitor",
             daemon=True
         )
-        self._monitor_thread.start()
+        self.monitor_thread.start()
         logger.info("Flow controller started")
     
     def stop(self):
-        """Stop the flow controller"""
+        """Stop flow control monitoring"""
         if not self.running:
             logger.warning("Flow controller already stopped")
             return
         
         self.running = False
-        if self._monitor_thread and self._monitor_thread.is_alive():
-            self._monitor_thread.join(timeout=1.0)
-        
+        if self.monitor_thread and self.monitor_thread.is_alive():
+            self.monitor_thread.join(timeout=1.0)
+        self.monitor_thread = None
         logger.info("Flow controller stopped")
     
     def add_flow_listener(self, listener: Callable[[bool], None]):
-        """Add a listener for flow control changes
+        """Add a listener for flow control state changes
         
-        The listener will be called with a boolean parameter:
-        True = throttling is active, False = normal flow
+        The listener will be called with a boolean indicating if throttling is active
         """
-        self._flow_listeners.append(listener)
+        self.listeners.append(listener)
     
     def remove_flow_listener(self, listener: Callable[[bool], None]):
         """Remove a flow control listener"""
-        if listener in self._flow_listeners:
-            self._flow_listeners.remove(listener)
+        if listener in self.listeners:
+            self.listeners.remove(listener)
     
     def is_throttling(self) -> bool:
-        """Check if throttling is active"""
+        """Check if flow control is currently throttling"""
         return self.throttling
     
     def _notify_listeners(self, throttling: bool):
-        """Notify all listeners of flow control changes"""
-        for listener in self._flow_listeners:
+        """Notify all listeners of flow control state change"""
+        for listener in self.listeners:
             try:
                 listener(throttling)
             except Exception as e:
                 logger.error(f"Error in flow control listener: {e}")
     
     def _monitor_loop(self):
-        """Monitor the queue and adjust flow control"""
+        """Monitor queue size and adjust flow control"""
         while self.running:
             try:
                 stats = self.message_queue.get_stats()
                 max_size = self.message_queue.queue.maxsize
-                queue_size = stats["queue_size"]
+                current_size = stats["queue_size"]
                 
-                # Calculate queue fill percentage
-                fill_percentage = queue_size / max_size if max_size > 0 else 0
+                # Calculate fill ratio
+                fill_ratio = current_size / max_size if max_size > 0 else 0
                 
-                # Check if we need to change throttling state
-                if not self.throttling and fill_percentage >= self.high_watermark:
+                # Check watermarks
+                if not self.throttling and fill_ratio >= self.high_watermark:
                     logger.warning(
-                        f"Queue fill ({fill_percentage:.1%}) exceeded high watermark, "
-                        f"activating throttling"
+                        f"Flow control activated: Queue at {fill_ratio:.1%} capacity "
+                        f"(size: {current_size}/{max_size})"
                     )
                     self.throttling = True
                     self._notify_listeners(True)
-                
-                elif self.throttling and fill_percentage <= self.low_watermark:
+                    
+                elif self.throttling and fill_ratio <= self.low_watermark:
                     logger.info(
-                        f"Queue fill ({fill_percentage:.1%}) below low watermark, "
-                        f"deactivating throttling"
+                        f"Flow control deactivated: Queue at {fill_ratio:.1%} capacity "
+                        f"(size: {current_size}/{max_size})"
                     )
                     self.throttling = False
                     self._notify_listeners(False)
-                
+                    
             except Exception as e:
-                logger.error(f"Error in flow controller: {e}")
-            
-            time.sleep(self.check_interval) 
+                logger.error(f"Error in flow control monitor: {e}")
+                
+            # Sleep until next check
+            time.sleep(self.check_interval)

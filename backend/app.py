@@ -8,11 +8,11 @@ import logging
 from pydantic import BaseModel
 import time
 
-from backend.mqtt_handler import MQTTHandler
+from backend.mqtt.mqtt_handler import MQTTHandler
 import backend.meshtastic_integration as meshtastic_integration
 from backend.config import settings, configure_logging
-from backend.message_processor import MessageFilter, TopicFilter, PayloadFilter, FilterChain, FilterAction
-from backend.message_queue import MessageQueue, FlowController
+from backend.messaging.message_processor import MessageFilter, TopicFilter, PayloadFilter, FilterChain, FilterAction
+from backend.messaging.message_queue import MessageQueue, FlowController
 
 # Authentication and new components
 from backend.models.user import User, Role
@@ -28,6 +28,11 @@ from backend.auth.rate_limiter import RateLimiter, get_limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+
+# Add monitoring imports - updated to import directly from routes to avoid circular imports
+from backend.monitoring.routes import router as monitoring_router
+from backend.monitoring.middleware import add_metrics_middleware
+from backend.monitoring.monitoring import get_metrics_manager
 
 # Configure logging
 log_level = configure_logging()
@@ -45,6 +50,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add metrics middleware
+add_metrics_middleware(app)
 
 # Initialize MQTT Handler
 mqtt_handler = MQTTHandler(
@@ -145,6 +153,7 @@ async def rate_limit_handler(request, exc):
 app.include_router(auth_router)
 app.include_router(mqtt_settings_router)
 app.include_router(ws_router)
+app.include_router(monitoring_router)
 
 
 # Routes
@@ -169,6 +178,9 @@ async def startup_event():
     # Start the Meshtastic integration
     await meshtastic_integration.initialize(mqtt_handler)
     
+    # Initialize metrics manager
+    metrics_manager = get_metrics_manager()
+    
     logger.info("Application startup complete")
 
 
@@ -182,6 +194,10 @@ async def shutdown_event():
     
     # Disconnect from MQTT broker
     mqtt_handler.disconnect()
+    
+    # Stop metrics collection
+    metrics_manager = get_metrics_manager()
+    metrics_manager.stop()
 
 
 async def on_mqtt_message(topic, payload):

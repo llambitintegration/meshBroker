@@ -1,54 +1,122 @@
-# Meshtastic MQTT Bridge
+# MeshBroker: Meshtastic MQTT Bridge
 
-A complete solution for hosting a Mosquitto MQTT broker on Debian/Linux with a FastAPI backend and Node.js frontend for integration with Meshtastic nodes.
+A powerful bridge application connecting Meshtastic mesh networks with MQTT, providing real-time visualization, monitoring, and management capabilities.
 
 ## Overview
 
-This project provides a complete infrastructure for:
+MeshBroker serves as an intelligent bridge between Meshtastic mesh networks and MQTT, enabling seamless communication, data visualization, and network management. The system includes:
 
-1. Running an MQTT broker (Mosquitto)
-2. Processing and routing MQTT messages with a FastAPI backend
-3. Visualizing and interacting with Meshtastic nodes via a web interface
-4. Supporting the Sparkplug MQTT message format for industrial IoT
+- Robust backend with Python FastAPI
+- MQTT integration with full protocol support
+- WebSocket API for real-time updates
+- Comprehensive frontend dashboard
+- Map visualization for node positioning
+- Message analytics and management
 
-## Architecture
+## Project Structure
 
-The system consists of three main components:
-
-1. **Mosquitto MQTT Broker**: A lightweight message broker that implements the MQTT protocol, ideal for IoT devices with constrained resources.
-
-2. **FastAPI Backend**: A Python-based API server that:
-   - Connects to the MQTT broker
-   - Processes messages
-   - Provides REST API endpoints for frontend interaction
-   - Manages Meshtastic node integration
-
-3. **Node.js Frontend**: A web interface that:
-   - Displays connected Meshtastic nodes
-   - Shows message history
-   - Provides visualizations of node activity
-   - Allows sending messages to nodes
-   - Includes an MQTT explorer for debugging
+```
+meshBroker/
+├── backend/                 # FastAPI backend application
+│   ├── mqtt/                # MQTT handler and broker integration
+│   ├── ws/                  # WebSocket implementation
+│   ├── auth/                # Authentication and authorization
+│   ├── models/              # Data models
+│   ├── message_handlers/    # Message processing logic
+│   └── monitoring/          # System monitoring
+├── frontend/                # Frontend web application
+│   ├── public/              # Static web assets
+│   │   ├── js/              # JavaScript files
+│   │   └── css/             # CSS styles
+├── mosquitto/               # MQTT broker configuration
+└── mqtt_data/               # MQTT data storage
+```
 
 ## Features
 
-- Real-time message streaming via WebSocket
-- Meshtastic node status monitoring
-- Direct messaging to Meshtastic nodes
-- Message history and visualization
-- Topic-based subscription management
-- Comprehensive MQTT explorer
+### Backend
+- MQTT message handling with QoS levels 0, 1, and 2
+- Meshtastic protocol integration
+- Message persistence and queue management
+- Authentication and authorization
+- Topic-based WebSocket channels
+- Comprehensive system monitoring
+- RESTful API for management
 
-## Installation
+### Frontend
+- Real-time dashboard with message statistics
+- Interactive node management interface
+- Message visualization and history
+- MQTT topic explorer with subscription management
+- Real-time map visualization of node positions
+- Responsive, modern UI design
+
+## Getting Started
 
 ### Prerequisites
+- Python 3.8+
+- Node.js 14+
+- Mosquitto MQTT Broker
+- Meshtastic device(s)
 
-- Debian/Ubuntu Linux system
-- Root access
-
-### Automatic Installation
+### Installation
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/meshtastic-mqtt-bridge.git
-cd meshtastic-mqtt-bridge
+git clone https://github.com/yourusername/meshBroker.git
+cd meshBroker
+```
+
+2. Set up the backend:
+```bash
+cd backend
+pip install -r requirements.txt
+```
+
+3. Start the backend server:
+```bash
+python run.py
+```
+
+4. Start the frontend server:
+```bash
+cd ../frontend
+npm install
+node server.js
+```
+
+5. Access the dashboard at `http://localhost:5000`
+
+## Progress
+
+The project is actively being developed according to the checklist in `backend/checklist.md`. Key milestones achieved:
+
+- ✅ Core MQTT functionality with message persistence
+- ✅ Meshtastic integration with node management
+- ✅ API and WebSocket enhancements
+- ✅ Testing and monitoring functionality
+- ✅ Initial frontend integration with WebSocket connectivity
+- ✅ Map visualization with Leaflet integration
+
+## Next Steps
+
+The following features are currently in development:
+
+- Enhanced message visualization components
+- Advanced node management interface
+- Geofencing and path visualization
+- Topic hierarchy visualization
+- User authentication UI
+- Mobile responsiveness and cross-browser compatibility
+- Progressive Web App capabilities
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- [Meshtastic](https://meshtastic.org/) for the amazing mesh networking platform
+- [Mosquitto](https://mosquitto.org/) for the reliable MQTT broker
+- [FastAPI](https://fastapi.tiangolo.com/) for the efficient backend framework
+- [Leaflet](https://leafletjs.com/) for the interactive mapping library

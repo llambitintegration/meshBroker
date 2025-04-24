@@ -5,11 +5,19 @@
 
 class MQTTClient {
   constructor() {
-    // API base URL
-    this.apiBaseUrl = 'http://127.0.0.1:8000';
+    // Determine if we should use secure websocket based on the protocol
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const hostname = window.location.hostname || '127.0.0.1';
+    const apiPort = '8000'; // API port
     
-    // WebSocket URL
-    this.wsUrl = 'ws://127.0.0.1:8000/ws';
+    // API base URL (using the current protocol)
+    this.apiBaseUrl = `${window.location.protocol}//${hostname}:${apiPort}`;
+    
+    // WebSocket URL (using protocol-aware connection)
+    this.wsUrl = `${protocol}//${hostname}:${apiPort}/ws`;
+    
+    // Auth token for WebSocket authentication
+    this.authToken = localStorage.getItem('auth_token') || null;
     
     // WebSocket connection
     this.ws = null;
@@ -24,6 +32,7 @@ class MQTTClient {
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 5;
     this.reconnectInterval = 3000;
+    this.reconnectTimer = null;
     
     // Message history
     this.messageHistory = [];
@@ -34,6 +43,9 @@ class MQTTClient {
     
     // Node information
     this.nodes = {};
+    
+    // WebSocket channel ID (for enhanced WebSocket support)
+    this.channelId = null;
   }
 
   /**
@@ -44,7 +56,28 @@ class MQTTClient {
     this.messageCallback = messageCallback;
     
     try {
-      // Check API status first
+      // Check authentication status if we have a token
+      if (this.authToken) {
+        try {
+          const authResponse = await fetch(`${this.apiBaseUrl}/auth/validate`, {
+            headers: {
+              'Authorization': `Bearer ${this.authToken}`
+            }
+          });
+          
+          if (!authResponse.ok) {
+            console.warn('Authentication token is invalid or expired');
+            this.authToken = null;
+            localStorage.removeItem('auth_token');
+          } else {
+            console.log('Authentication token is valid');
+          }
+        } catch (error) {
+          console.error('Error validating authentication token:', error);
+        }
+      }
+      
+      // Check API status
       const statusResponse = await this.checkStatus();
       
       if (statusResponse && statusResponse.status === 'connected') {
@@ -76,33 +109,56 @@ class MQTTClient {
    * Connect to the WebSocket endpoint
    */
   connectWebSocket() {
+    // Clear any existing reconnection timer
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    
     // Close existing connection if any
     if (this.ws) {
       this.ws.close();
     }
     
     try {
-      this.ws = new WebSocket(this.wsUrl);
+      let wsUrl = this.wsUrl;
+      
+      // Add authentication token if available
+      if (this.authToken) {
+        wsUrl = `${this.wsUrl}?token=${this.authToken}`;
+      }
+      
+      console.log(`Connecting to WebSocket: ${wsUrl.replace(/token=([^&]*)/, 'token=****')}`);
+      this.ws = new WebSocket(wsUrl);
       
       this.ws.onopen = () => {
         console.log('WebSocket connection established');
         this.connected = true;
         this.reconnectAttempts = 0;
         this.updateMqttStatus(true);
+        
+        // Request channel assignment for topic-based subscriptions
+        if (this.authToken) {
+          this.requestChannelAssignment();
+        }
       };
       
       this.ws.onclose = (event) => {
         console.warn(`WebSocket connection closed: ${event.code} ${event.reason}`);
         this.connected = false;
+        this.channelId = null;
         this.updateMqttStatus(false);
         
-        // Try to reconnect
+        // Try to reconnect with exponential backoff
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
+          const backoffTime = this.reconnectInterval * Math.pow(1.5, this.reconnectAttempts);
           this.reconnectAttempts++;
-          console.log(`Reconnecting (attempt ${this.reconnectAttempts})...`);
-          setTimeout(() => this.connectWebSocket(), this.reconnectInterval);
+          console.log(`Reconnecting (attempt ${this.reconnectAttempts}) in ${backoffTime}ms...`);
+          this.reconnectTimer = setTimeout(() => this.connectWebSocket(), backoffTime);
         } else {
           console.error('Max reconnection attempts reached');
+          // Show reconnection button to user
+          this.showReconnectButton();
         }
       };
       
@@ -115,6 +171,17 @@ class MQTTClient {
       this.ws.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
+          
+          // Handle channel assignment response
+          if (message.type === 'channel_assignment') {
+            this.channelId = message.channel_id;
+            console.log(`Assigned to channel: ${this.channelId}`);
+            
+            // Subscribe to previously subscribed topics in the new channel
+            this.resubscribeTopics();
+            return;
+          }
+          
           this.handleMessage(message);
         } catch (error) {
           console.error('Error parsing WebSocket message:', error);
@@ -123,6 +190,14 @@ class MQTTClient {
     } catch (error) {
       console.error('Error connecting to WebSocket:', error);
       this.updateMqttStatus(false);
+      
+      // Try to reconnect
+      if (this.reconnectAttempts < this.maxReconnectAttempts) {
+        this.reconnectAttempts++;
+        const backoffTime = this.reconnectInterval * Math.pow(1.5, this.reconnectAttempts);
+        console.log(`Reconnecting (attempt ${this.reconnectAttempts}) in ${backoffTime}ms...`);
+        this.reconnectTimer = setTimeout(() => this.connectWebSocket(), backoffTime);
+      }
     }
   }
 
@@ -184,7 +259,19 @@ class MQTTClient {
    */
   async checkStatus() {
     try {
-      const response = await fetch(`${this.apiBaseUrl}/broker_status`);
+      const headers = {};
+      if (this.authToken) {
+        headers['Authorization'] = `Bearer ${this.authToken}`;
+      }
+      
+      const response = await fetch(`${this.apiBaseUrl}/broker_status`, {
+        headers
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error ${response.status}`);
+      }
+      
       const data = await response.json();
       return data;
     } catch (error) {
@@ -220,10 +307,12 @@ class MQTTClient {
    */
   async subscribeTopic(topic) {
     try {
+      // First, send API request to subscribe the backend
       const response = await fetch(`${this.apiBaseUrl}/subscribe`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': this.authToken ? `Bearer ${this.authToken}` : undefined
         },
         body: JSON.stringify({ topic }),
       });
@@ -231,7 +320,17 @@ class MQTTClient {
       const data = await response.json();
       
       if (data.status === 'success') {
+        // Add to local set of subscribed topics
         this.subscribedTopics.add(topic);
+        
+        // If we have a channel, also subscribe the channel
+        if (this.channelId && this.connected) {
+          await this.subscribeToChannel(topic);
+        }
+        
+        console.log(`Successfully subscribed to topic: ${topic}`);
+      } else {
+        console.error(`Failed to subscribe to topic: ${topic}`, data.message);
       }
       
       return data;
@@ -385,6 +484,96 @@ class MQTTClient {
     } else {
       statusElement.className = 'badge rounded-pill text-bg-danger';
       statusElement.innerHTML = '<i class="fas fa-server"></i> API: Disconnected';
+    }
+  }
+
+  /**
+   * Request channel assignment for topic-based messaging
+   */
+  requestChannelAssignment() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.error('WebSocket not connected, cannot request channel');
+      return;
+    }
+    
+    const request = {
+      type: 'request_channel',
+      client_type: 'web_client',
+      auth_token: this.authToken
+    };
+    
+    try {
+      this.ws.send(JSON.stringify(request));
+      console.log('Requested channel assignment');
+    } catch (error) {
+      console.error('Error requesting channel assignment:', error);
+    }
+  }
+
+  /**
+   * Resubscribe to previously subscribed topics after reconnection
+   */
+  async resubscribeTopics() {
+    if (!this.channelId || !this.connected) {
+      console.error('Not connected to a channel, cannot resubscribe');
+      return;
+    }
+    
+    console.log(`Resubscribing to ${this.subscribedTopics.size} topics`);
+    
+    for (const topic of this.subscribedTopics) {
+      await this.subscribeToChannel(topic);
+    }
+  }
+
+  /**
+   * Subscribe to a topic in the assigned channel
+   * @param {string} topic - Topic to subscribe to
+   */
+  async subscribeToChannel(topic) {
+    if (!this.channelId || !this.connected) {
+      console.error('Not connected to a channel, cannot subscribe');
+      return false;
+    }
+    
+    const request = {
+      type: 'subscribe',
+      channel_id: this.channelId,
+      topic: topic
+    };
+    
+    try {
+      this.ws.send(JSON.stringify(request));
+      console.log(`Subscribed to ${topic} in channel ${this.channelId}`);
+      return true;
+    } catch (error) {
+      console.error(`Error subscribing to ${topic}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Show reconnection button in the UI
+   */
+  showReconnectButton() {
+    const statusElement = document.getElementById('mqtt-status');
+    if (statusElement) {
+      statusElement.innerHTML = `
+        <i class="fas fa-exclamation-triangle"></i> 
+        MQTT: Disconnected 
+        <button id="manual-reconnect" class="btn btn-sm btn-outline-light ms-2">
+          <i class="fas fa-sync-alt"></i> Reconnect
+        </button>
+      `;
+      
+      // Add click handler to the reconnect button
+      const reconnectButton = document.getElementById('manual-reconnect');
+      if (reconnectButton) {
+        reconnectButton.addEventListener('click', () => {
+          this.reconnectAttempts = 0;
+          this.connectWebSocket();
+        });
+      }
     }
   }
 }

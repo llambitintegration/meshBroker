@@ -249,26 +249,27 @@ class ProtocolConverter:
                 # Try to decode as utf-8 text
                 text = payload.decode('utf-8')
                 
-                # Check if it's valid JSON
+                # See if it's actually JSON
                 try:
                     data = json.loads(text)
-                    return 'json', data
+                    return ("json", data)
                 except json.JSONDecodeError:
-                    # Not JSON, just return as text
-                    return 'text', text
+                    # Just plain text
+                    return ("text", text)
+                    
             except UnicodeDecodeError:
-                # Not valid UTF-8 text, treat as binary
-                return 'binary', payload
+                # It's truly binary data
+                return ("binary", payload)
         
-        # Handle string data
+        # Handle string input
         elif isinstance(payload, str):
-            # Check if it's valid JSON
+            # See if it's JSON
             try:
                 data = json.loads(payload)
-                return 'json', data
+                return ("json", data)
             except json.JSONDecodeError:
-                # Not JSON, just return as text
-                return 'text', payload
+                # Just plain text
+                return ("text", payload)
         
-        # Unknown type
-        return 'unknown', payload 
+        # Fallback
+        return ("unknown", payload)
