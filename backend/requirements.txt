@@ -7,4 +7,16 @@ paho-mqtt>=2.2.1
 websockets>=11.0.3
 python-multipart>=0.0.6
 typing-extensions>=4.8.0
-asyncio>=3.4.3 
+asyncio>=3.4.3
+meshtastic>=2.0.0
+cryptography>=41.0.0
+folium>=0.14.0
+# Added for authentication and security
+python-jose>=3.3.0
+passlib>=1.7.4
+bcrypt>=4.0.1
+# Added for rate limiting
+slowapi>=0.1.7
+redis>=4.6.0
+# Added for connection management
+fastapi-websocket-pubsub>=0.3.1 

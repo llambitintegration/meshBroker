@@ -4,7 +4,16 @@ import argparse
 import uvicorn
 from dotenv import load_dotenv
 import logging
-from config import configure_logging
+import sys
+from pathlib import Path
+
+# Add the backend directory to the Python path
+# This ensures that the backend module can be imported
+backend_dir = Path(__file__).parent
+sys.path.insert(0, str(backend_dir.parent))
+
+# Import config after setting up the path
+from backend.config import configure_logging
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -54,7 +63,7 @@ def main():
     
     # Start uvicorn server
     uvicorn.run(
-        "app:app", 
+        "backend.app:app", 
         host=args.host, 
         port=args.port, 
         reload=args.reload,

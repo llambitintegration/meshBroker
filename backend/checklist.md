@@ -18,14 +18,14 @@ Phase 2: Core MQTT Functionality
 [x] Implement MQTT broker monitoring and health checks
 
 Phase 3: Meshtastic Integration
-[ ] Enhance Meshtastic node management
-[ ] Store node data persistently (database integration)
-[ ] Implement node timeout/expiration
-[ ] Add node grouping and categorization
-[ ] Create specialized message handlers for different Meshtastic message types
-[ ] Implement advanced routing for Meshtastic messages
-[ ] Add support for binary data messages
-[ ] Implement protocol conversion for non-JSON messages
+[x] Enhance Meshtastic node management
+[x] Store node data persistently (database integration)
+[x] Implement node timeout/expiration
+[x] Add node grouping and categorization
+[x] Create specialized message handlers for different Meshtastic message types
+[x] Implement advanced routing for Meshtastic messages
+[x] Add support for binary data messages
+[x] Implement protocol conversion for non-JSON messages
 
 Phase 4: API and WebSocket Enhancements
 [ ] Implement user authentication for API access
@@ -50,14 +50,8 @@ Phase 6: Security Enhancements
 [ ] Add request validation and sanitization
 [ ] Implement rate limiting for API endpoints
 
-Phase 7: Deployment and Operations
-[ ] Create Docker container for the backend
-[ ] Implement startup and shutdown scripts
-[ ] Add systemd service definitions
-[ ] Create documentation for operations and maintenance
-[ ] Implement backup and restore procedures for MQTT broker state
 
-Phase 8: Frontend Integration
+Phase 7: Frontend Integration
 [ ] Implement WebSocket client in the frontend
 [ ] Create message visualization components
 [ ] Add node management UI

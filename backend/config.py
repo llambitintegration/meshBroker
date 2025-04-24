@@ -1,4 +1,5 @@
 import os
+import secrets
 from pydantic_settings import BaseSettings
 import logging
 
@@ -47,6 +48,22 @@ class Settings(BaseSettings):
     
     # CORS settings
     CORS_ORIGINS: list = ["*"]  # Wide open for local development
+    
+    # Authentication settings
+    JWT_SECRET: str = os.getenv("JWT_SECRET", secrets.token_hex(32))
+    JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60))
+    REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", 7))
+    
+    # Rate limiting settings
+    DEFAULT_RATE_LIMIT: int = int(os.getenv("DEFAULT_RATE_LIMIT", 100))  # requests per minute
+    ADMIN_RATE_LIMIT: int = int(os.getenv("ADMIN_RATE_LIMIT", 300))  # requests per minute
+    API_RATE_LIMIT: int = int(os.getenv("API_RATE_LIMIT", 600))  # requests per minute
+    
+    # WebSocket settings
+    WS_MAX_CONNECTIONS: int = int(os.getenv("WS_MAX_CONNECTIONS", 100))
+    WS_PING_INTERVAL: int = int(os.getenv("WS_PING_INTERVAL", 30))  # seconds
+    WS_PING_TIMEOUT: int = int(os.getenv("WS_PING_TIMEOUT", 10))  # seconds
     
     model_config = {
         "env_file": ".env"
