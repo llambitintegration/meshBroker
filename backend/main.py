@@ -3,7 +3,7 @@ Main FastAPI application for mesh broker
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import mesh
+from .routers import mesh, status
 
 app = FastAPI(
     title="Mesh Broker API",
@@ -22,6 +22,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(mesh.router)
+app.include_router(status.router)
 
 @app.get("/")
 def read_root():
@@ -29,5 +30,6 @@ def read_root():
     return {
         "message": "Welcome to Mesh Broker API",
         "docs": "/docs",
-        "redoc": "/redoc"
+        "redoc": "/redoc",
+        "status": "/status"
     }

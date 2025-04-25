@@ -34,6 +34,10 @@ from backend.monitoring.routes import router as monitoring_router
 from backend.monitoring.middleware import add_metrics_middleware
 from backend.monitoring.monitoring import get_metrics_manager
 
+# Add status router
+from backend.routers.status import router as status_router
+from backend.routers.status import set_mqtt_handler as set_status_mqtt_handler
+
 # Configure logging
 log_level = configure_logging()
 logger = logging.getLogger(__name__)
@@ -73,6 +77,9 @@ mqtt_handler = MQTTHandler(
 
 # Set MQTT handler reference in the settings router
 set_mqtt_handler(mqtt_handler)
+
+# Set MQTT handler reference in the status router
+set_status_mqtt_handler(mqtt_handler)
 
 # Legacy WebSocket connection manager (kept for backward compatibility)
 class ConnectionManager:
@@ -154,7 +161,10 @@ app.include_router(auth_router)
 app.include_router(mqtt_settings_router)
 app.include_router(ws_router)
 app.include_router(monitoring_router)
+app.include_router(status_router)  # Add the status router
 
+# Add global variable to track MQTT connection status
+mqtt_status = {"status": "disconnected"}
 
 # Routes
 @app.on_event("startup")
@@ -174,6 +184,9 @@ async def startup_event():
     
     # Set callback for received messages
     mqtt_handler.set_message_callback(on_mqtt_message)
+    
+    # Set callback for connection status changes
+    mqtt_handler.set_connection_callback(on_mqtt_connection_change)
     
     # Start the Meshtastic integration
     await meshtastic_integration.initialize(mqtt_handler)
@@ -296,14 +309,16 @@ async def get_topics(request: Request):
 @app.get("/broker_status")
 @limiter.limit("30/minute")
 async def get_broker_status(request: Request):
-    """Check MQTT broker connection status"""
-    is_connected = mqtt_handler.is_connected()
-    broker_status = mqtt_handler.get_broker_status()
-    logger.debug(f"MQTT broker status: {'connected' if is_connected else 'disconnected'}")
-    return {
-        "connection": "connected" if is_connected else "disconnected",
-        "broker_status": broker_status
+    """Get the current status of the MQTT broker connection"""
+    global mqtt_status
+    
+    # Add timestamp to the status info
+    status_info = {
+        **mqtt_status,
+        "timestamp": int(time.time())
     }
+    
+    return status_info
 
 
 @app.get("/queue_stats")
@@ -566,16 +581,60 @@ async def get_meshtastic_stats(request: Request):
 # Legacy WebSocket endpoint (kept for backward compatibility)
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """Legacy WebSocket endpoint"""
+    """WebSocket endpoint for real-time updates"""
+    await manager.connect(websocket)
+    
+    # Send initial status information
+    initial_status = {
+        "type": "status",
+        "data": {
+            "api": {
+                "status": "connected",
+                "timestamp": int(time.time())
+            },
+            "mqtt": {
+                "status": "connected" if mqtt_handler.is_connected() else "disconnected",
+                "timestamp": int(time.time())
+            }
+        }
+    }
+    
     try:
-        await manager.connect(websocket)
+        await websocket.send_text(json.dumps(initial_status))
         while True:
-            await websocket.receive_text()  # Keep connection alive
+            # Keep the connection alive - wait for messages
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            # Handle different message types
+            if message["type"] == "ping":
+                await websocket.send_text(json.dumps({"type": "pong"}))
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+
+# Add a new function to handle MQTT connection status changes
+async def on_mqtt_connection_change(connected: bool):
+    """Callback for MQTT connection status changes"""
+    global mqtt_status
+    
+    if connected:
+        mqtt_status["status"] = "connected"
+        logger.info("MQTT broker connection established")
+    else:
+        mqtt_status["status"] = "disconnected"
+        logger.warning("MQTT broker connection lost")
+    
+    # Broadcast connection status to all websocket clients
+    status_message = {
+        "type": "mqtt_status",
+        "data": mqtt_status
+    }
+    
+    try:
+        await enhanced_manager.broadcast(json.dumps(status_message))
     except Exception as e:
-        logger.error(f"Error in WebSocket connection: {e}")
-        manager.disconnect(websocket)
+        logger.error(f"Error broadcasting MQTT status: {e}")
 
 
 if __name__ == "__main__":

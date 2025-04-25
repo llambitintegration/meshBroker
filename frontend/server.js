@@ -6,6 +6,10 @@ const path = require('path');
 const port = process.env.PORT || 5000;
 const publicDir = path.join(__dirname, 'public');
 
+// Log startup info
+console.log(`Starting server on port ${port}`);
+console.log(`Serving static files from: ${publicDir}`);
+
 const mimeTypes = {
   '.html': 'text/html',
   '.js': 'text/javascript',
@@ -27,6 +31,18 @@ const mimeTypes = {
 const server = http.createServer((req, res) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
   
+  // Enable CORS for all requests
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  
+  // Handle OPTIONS requests for CORS preflight
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+  
   // Handle API health check
   if (req.url === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -44,9 +60,13 @@ const server = http.createServer((req, res) => {
     filePath = path.join(publicDir, cleanUrl);
   }
   
-  // Check if file exists
-  fs.access(filePath, fs.constants.F_OK, (err) => {
-    if (err) {
+  // Debug file path resolution
+  console.log(`Request for ${req.url} => ${filePath}`);
+  
+  // Use stat instead of access to get more information
+  fs.stat(filePath, (err, stats) => {
+    if (err || !stats.isFile()) {
+      console.log(`File not found or not a file: ${filePath}`);
       // File not found, serve index.html for SPA
       filePath = path.join(publicDir, 'index.html');
     }
@@ -60,15 +80,18 @@ const server = http.createServer((req, res) => {
       if (err) {
         if (err.code === 'ENOENT') {
           // File not found
+          console.error(`404 Not Found: ${filePath}`);
           res.writeHead(404);
           res.end('404 Not Found');
         } else {
           // Server error
+          console.error(`500 Server Error: ${err.code} for ${filePath}`);
           res.writeHead(500);
           res.end(`Server Error: ${err.code}`);
         }
       } else {
         // Success
+        console.log(`200 OK: ${filePath} (${contentType})`);
         res.writeHead(200, { 'Content-Type': contentType });
         res.end(content, 'utf-8');
       }

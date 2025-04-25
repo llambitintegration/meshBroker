@@ -16,8 +16,17 @@
   <!-- Leaflet Map CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
   
-  <!-- Custom styles -->
-  <link rel="stylesheet" href="css/styles.css">
+  <!-- Custom styles - with error handling -->
+  <link rel="stylesheet" href="css/styles.css" onerror="console.error('Failed to load styles.css')">
+  
+  <!-- Script error handling -->
+  <script>
+    window.addEventListener('error', function(e) {
+      if (e.target.tagName === 'SCRIPT' || e.target.tagName === 'LINK') {
+        console.error('Resource load error:', e.target.src || e.target.href);
+      }
+    }, true);
+  </script>
   
   <!-- Leaflet Map JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
@@ -427,9 +436,38 @@
   <!-- Bootstrap JS Bundle -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
   
-  <!-- Custom scripts -->
-  <script src="js/mqtt-client.js"></script>
-  <script src="js/dashboard.js"></script>
-  <script src="js/map.js"></script>
+  <!-- Custom scripts with error handling -->
+  <script src="js/mqtt-client.js" onerror="console.error('Failed to load mqtt-client.js')"></script>
+  <script>
+    // Check if MQTT client loaded properly
+    if (typeof MQTTClient === 'undefined') {
+      console.error('MQTT client class not defined - script may have failed to load');
+    }
+  </script>
+  
+  <script src="js/dashboard.js" onerror="console.error('Failed to load dashboard.js')"></script>
+  <script src="js/map.js" onerror="console.error('Failed to load map.js')"></script>
+  
+  <!-- Script to check for initialization errors -->
+  <script>
+    // Check that initialization was successful
+    setTimeout(function() {
+      if (typeof mqttClient === 'undefined') {
+        console.error('MQTT client not initialized properly');
+      }
+      
+      // Check navigation is working
+      const activeLinks = document.querySelectorAll('.nav-link.active');
+      if (activeLinks.length === 0) {
+        console.warn('No active navigation link found');
+        // Try to activate first link automatically
+        const firstLink = document.querySelector('.nav-link');
+        if (firstLink) {
+          console.log('Activating first navigation link');
+          firstLink.click();
+        }
+      }
+    }, 1000);
+  </script>
 </body>
 </html>

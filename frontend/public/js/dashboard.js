@@ -39,35 +39,90 @@ const chartData = {
 };
 
 // Initialize when DOM is loaded
-document.addEventListener('DOMContentLoaded', initDashboard);
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initDashboard);
+} else {
+  // DOM already loaded, initialize immediately
+  console.log('DOM already loaded, initializing dashboard');
+  setTimeout(initDashboard, 0);
+}
 
 /**
  * Initialize the dashboard
  */
 async function initDashboard() {
-  // Initialize MQTT client
-  await mqttClient.init(handleMQTTMessage);
-  
-  // Set up page navigation
-  setupNavigation();
-  
-  // Set up message chart
-  initializeChart();
-  
-  // Set up form handlers
-  setupFormHandlers();
-  
-  // Set up button handlers
-  setupButtonHandlers();
-  
-  // Update nodes list
-  await updateNodesList();
-  
-  // Set up periodic updates
-  setInterval(updateNodesList, 30000); // Update nodes every 30 seconds
-  setInterval(checkApiStatus, 15000);  // Check API status every 15 seconds
-  
-  console.log('Dashboard initialized');
+  try {
+    console.log('Initializing dashboard...');
+    
+    // Ensure all required elements are available
+    if (!document.getElementById('mqtt-status')) {
+      console.error('MQTT status element not found!');
+    }
+    if (!document.getElementById('api-status')) {
+      console.error('API status element not found!');
+    }
+    
+    // Initialize MQTT client
+    console.log('Initializing MQTT client...');
+    const mqttInitSuccess = await mqttClient.init(handleMQTTMessage);
+    
+    if (!mqttInitSuccess) {
+      console.warn('MQTT client initialization failed, but continuing with dashboard initialization');
+    } else {
+      console.log('MQTT client initialized successfully');
+    }
+    
+    // Set up page navigation
+    console.log('Setting up page navigation...');
+    setupNavigation();
+    
+    // Set up message chart
+    console.log('Initializing chart...');
+    try {
+      initializeChart();
+    } catch (chartError) {
+      console.error('Failed to initialize chart:', chartError);
+      // Continue initialization even if chart fails
+    }
+    
+    // Set up form handlers
+    console.log('Setting up form handlers...');
+    setupFormHandlers();
+    
+    // Set up button handlers
+    console.log('Setting up button handlers...');
+    setupButtonHandlers();
+    
+    // Update nodes list
+    console.log('Updating nodes list...');
+    try {
+      await updateNodesList();
+    } catch (nodesError) {
+      console.error('Failed to update nodes list:', nodesError);
+      // Continue even if nodes list update fails
+    }
+    
+    // Set up periodic updates with error handling
+    setInterval(() => {
+      try {
+        updateNodesList();
+      } catch (error) {
+        console.error('Error in periodic nodes update:', error);
+      }
+    }, 30000); // Update nodes every 30 seconds
+    
+    setInterval(() => {
+      try {
+        checkApiStatus();
+      } catch (error) {
+        console.error('Error in periodic API status check:', error);
+      }
+    }, 15000);  // Check API status every 15 seconds
+    
+    console.log('Dashboard initialized successfully');
+  } catch (error) {
+    console.error('Error initializing dashboard:', error);
+  }
 }
 
 /**
@@ -139,42 +194,92 @@ function handleMQTTMessage(message) {
 function setupNavigation() {
   const navLinks = document.querySelectorAll('.nav-link');
   
+  if (!navLinks.length) {
+    console.warn('No navigation links found for setupNavigation');
+    return;
+  }
+  
+  console.log(`Found ${navLinks.length} navigation links`);
+  
+  // Remove any existing event listeners (to prevent duplicates)
   navLinks.forEach(link => {
-    link.addEventListener('click', (event) => {
+    const newLink = link.cloneNode(true);
+    link.parentNode.replaceChild(newLink, link);
+  });
+  
+  // Get fresh collection of links after replacement
+  const freshNavLinks = document.querySelectorAll('.nav-link');
+  
+  freshNavLinks.forEach(link => {
+    link.addEventListener('click', function(event) {
       event.preventDefault();
       
       // Get the page to show
-      const page = link.getAttribute('data-page');
-      if (!page) return;
+      const page = this.getAttribute('data-page');
+      if (!page) {
+        console.warn('Navigation link clicked without data-page attribute', this);
+        return;
+      }
+      
+      // Skip if already on this page to prevent recursion
+      if (currentPage === page) {
+        console.log(`Already on page: ${page}, ignoring click`);
+        return;
+      }
+      
+      console.log(`Navigating to page: ${page} from ${currentPage}`);
       
       // Update navigation links
-      navLinks.forEach(navLink => {
+      freshNavLinks.forEach(navLink => {
         navLink.classList.remove('active');
       });
-      link.classList.add('active');
+      this.classList.add('active');
       
       // Hide all pages
-      document.querySelectorAll('.page').forEach(pageEl => {
+      const pageElements = document.querySelectorAll('.page');
+      if (!pageElements.length) {
+        console.warn('No page elements found!');
+        return;
+      }
+      
+      // First remove active class from all pages
+      pageElements.forEach(pageEl => {
         pageEl.classList.remove('active');
       });
       
-      // Show the selected page
+      // Then add active class to the selected page
       const pageElement = document.getElementById(`${page}-page`);
       if (pageElement) {
         pageElement.classList.add('active');
+        // Update current page tracker
         currentPage = page;
         
         // Perform page-specific updates
-        if (page === 'nodes') {
-          updateNodesList();
-        } else if (page === 'messages') {
-          updateMessageHistory();
-        } else if (page === 'mqtt-explorer') {
-          updateTopicsList();
+        try {
+          if (page === 'nodes') {
+            updateNodesList();
+          } else if (page === 'messages') {
+            updateMessageHistory();
+          } else if (page === 'mqtt-explorer') {
+            updateTopicsList();
+          } else if (page === 'map' && typeof initializeMap === 'function') {
+            // Initialize map if not already done
+            initializeMap();
+          }
+        } catch (error) {
+          console.error(`Error performing updates for page ${page}:`, error);
         }
+      } else {
+        console.error(`Page element not found: ${page}-page`);
       }
     });
   });
+  
+  // Ensure the current page is correctly marked as active
+  const currentNav = document.querySelector(`.nav-link[data-page="${currentPage}"]`);
+  if (currentNav) {
+    currentNav.classList.add('active');
+  }
 }
 
 /**
@@ -182,49 +287,69 @@ function setupNavigation() {
  */
 function initializeChart() {
   const ctx = document.getElementById('message-chart');
-  if (!ctx) return;
+  if (!ctx) {
+    console.warn('Message chart canvas element not found');
+    return;
+  }
+  
+  // Check if Chart.js is available
+  if (typeof Chart === 'undefined') {
+    console.error('Chart.js library not loaded');
+    return;
+  }
+  
+  console.log('Initializing message chart');
   
   // Initialize with empty data
+  chartData.labels = [];
+  chartData.datasets[0].data = [];
+  
   for (let i = 0; i < 10; i++) {
     chartData.labels.push('');
     chartData.datasets[0].data.push(0);
   }
   
-  messageChart = new Chart(ctx, {
-    type: 'line',
-    data: chartData,
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        title: {
-          display: true,
-          text: 'Message Activity'
-        },
-        legend: {
-          display: false
-        }
-      },
-      scales: {
-        y: {
-          beginAtZero: true,
+  try {
+    messageChart = new Chart(ctx, {
+      type: 'line',
+      data: chartData,
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
           title: {
             display: true,
-            text: 'Messages'
+            text: 'Message Activity'
+          },
+          legend: {
+            display: false
           }
         },
-        x: {
-          title: {
-            display: true,
-            text: 'Time'
+        scales: {
+          y: {
+            beginAtZero: true,
+            title: {
+              display: true,
+              text: 'Messages'
+            }
+          },
+          x: {
+            title: {
+              display: true,
+              text: 'Time'
+            }
           }
+        },
+        animation: {
+          duration: 500
         }
-      },
-      animation: {
-        duration: 500
       }
-    }
-  });
+    });
+    
+    console.log('Message chart initialized successfully');
+  } catch (error) {
+    console.error('Error initializing chart:', error);
+  }
 }
 
 /**
@@ -410,40 +535,117 @@ function setupFormHandlers() {
  * Set up button handlers
  */
 function setupButtonHandlers() {
-  // Refresh nodes button
-  const refreshNodesBtn = document.getElementById('refresh-nodes');
-  if (refreshNodesBtn) {
-    refreshNodesBtn.addEventListener('click', () => updateNodesList());
-  }
-  
-  // Refresh nodes detail button
-  const refreshNodesDetailBtn = document.getElementById('refresh-nodes-detail');
-  if (refreshNodesDetailBtn) {
-    refreshNodesDetailBtn.addEventListener('click', () => updateNodesList());
-  }
-  
-  // Clear messages button
-  const clearMessagesBtn = document.getElementById('clear-messages');
-  if (clearMessagesBtn) {
-    clearMessagesBtn.addEventListener('click', () => {
-      mqttClient.clearHistory();
-      updateRecentMessages();
+  try {
+    // Set up refresh nodes button
+    const refreshNodesBtn = document.getElementById('refresh-nodes');
+    if (refreshNodesBtn) {
+      refreshNodesBtn.addEventListener('click', async () => {
+        refreshNodesBtn.disabled = true;
+        refreshNodesBtn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i>';
+        
+        try {
+          await updateNodesList();
+        } catch (error) {
+          console.error('Error refreshing nodes:', error);
+        }
+        
+        setTimeout(() => {
+          refreshNodesBtn.disabled = false;
+          refreshNodesBtn.innerHTML = '<i class="fas fa-sync-alt"></i>';
+        }, 1000);
+      });
+    }
+    
+    // Refresh nodes detail button
+    const refreshNodesDetailBtn = document.getElementById('refresh-nodes-detail');
+    if (refreshNodesDetailBtn) {
+      refreshNodesDetailBtn.addEventListener('click', async () => {
+        refreshNodesDetailBtn.disabled = true;
+        refreshNodesDetailBtn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i>';
+        
+        try {
+          await updateNodesList();
+        } catch (error) {
+          console.error('Error refreshing nodes detail:', error);
+        }
+        
+        setTimeout(() => {
+          refreshNodesDetailBtn.disabled = false;
+          refreshNodesDetailBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+        }, 1000);
+      });
+    }
+    
+    // Set up clear messages button
+    const clearMessagesBtn = document.getElementById('clear-messages');
+    if (clearMessagesBtn) {
+      clearMessagesBtn.addEventListener('click', () => {
+        mqttClient.clearHistory();
+        updateRecentMessages();
+        document.getElementById('recent-messages-container').innerHTML = 
+          '<div class="alert alert-info">No messages received yet.</div>';
+      });
+    }
+    
+    // Clear MQTT messages button
+    const clearMqttMessagesBtn = document.getElementById('clear-mqtt-messages');
+    if (clearMqttMessagesBtn) {
+      clearMqttMessagesBtn.addEventListener('click', () => {
+        mqttClient.clearHistory();
+        updateMQTTExplorer(null, true);
+      });
+    }
+    
+    // Refresh topics button
+    const refreshTopicsBtn = document.getElementById('refresh-topics');
+    if (refreshTopicsBtn) {
+      refreshTopicsBtn.addEventListener('click', async () => {
+        refreshTopicsBtn.disabled = true;
+        refreshTopicsBtn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i>';
+        
+        try {
+          await updateTopicsList();
+        } catch (error) {
+          console.error('Error refreshing topics:', error);
+        }
+        
+        setTimeout(() => {
+          refreshTopicsBtn.disabled = false;
+          refreshTopicsBtn.innerHTML = '<i class="fas fa-sync-alt"></i>';
+        }, 1000);
+      });
+    }
+    
+    // Set up the navbar toggler for mobile
+    const navbarToggler = document.querySelector('.navbar-toggler');
+    if (navbarToggler) {
+      navbarToggler.addEventListener('click', function() {
+        const target = document.querySelector(this.getAttribute('data-bs-target'));
+        if (target) {
+          target.classList.toggle('show');
+        }
+      });
+      
+      console.log('Navbar toggler initialized');
+    }
+    
+    // Initialize all Bootstrap tooltips
+    if (typeof bootstrap !== 'undefined' && bootstrap.Tooltip) {
+      const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]');
+      [...tooltipTriggerList].map(tooltipTriggerEl => new bootstrap.Tooltip(tooltipTriggerEl));
+    }
+    
+    // Handle any broken images and replace with placeholder
+    document.querySelectorAll('img').forEach(img => {
+      img.addEventListener('error', function() {
+        this.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"%3E%3Cpath fill="%23ccc" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/%3E%3C/svg%3E';
+        this.alt = 'Image not available';
+      });
     });
-  }
-  
-  // Clear MQTT messages button
-  const clearMqttMessagesBtn = document.getElementById('clear-mqtt-messages');
-  if (clearMqttMessagesBtn) {
-    clearMqttMessagesBtn.addEventListener('click', () => {
-      mqttClient.clearHistory();
-      updateMQTTExplorer(null, true);
-    });
-  }
-  
-  // Refresh topics button
-  const refreshTopicsBtn = document.getElementById('refresh-topics');
-  if (refreshTopicsBtn) {
-    refreshTopicsBtn.addEventListener('click', () => updateTopicsList());
+    
+    console.log('Button handlers initialized');
+  } catch (error) {
+    console.error('Error setting up button handlers:', error);
   }
 }
 
@@ -1062,10 +1264,61 @@ function showNodeDetails(nodeId) {
  */
 async function checkApiStatus() {
   try {
-    const status = await mqttClient.checkStatus();
-    mqttClient.updateApiStatus(status.status === 'connected');
+    if (!mqttClient) {
+      console.error('MQTT client not initialized');
+      return;
+    }
+    
+    console.log('Checking API status...');
+    
+    // Add a timeout to the fetch request
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('API request timeout')), 5000)
+    );
+    
+    try {
+      // Race the API request against a timeout
+      const status = await Promise.race([
+        mqttClient.checkStatus(),
+        timeoutPromise
+      ]);
+      
+      if (status) {
+        const isConnected = status.status === 'connected' || 
+                           (status.services && status.services.mqtt && status.services.mqtt.status === 'connected');
+        
+        mqttClient.updateApiStatus(isConnected);
+        console.log(`API status updated: ${isConnected ? 'connected' : 'disconnected'}`);
+        
+        // Add detailed logging of the response
+        console.log('API status details:', status);
+        
+        if (!isConnected) {
+          // If API is up but reporting disconnected, show more specific message
+          mqttClient.showConnectionAlert(
+            'API server is reachable but reporting disconnected status. The MQTT broker may be down.'
+          );
+        } else {
+          // Clear any existing alert if we're connected
+          mqttClient.clearConnectionAlert();
+        }
+      } else {
+        console.warn('Failed to get API status - received empty response');
+        mqttClient.updateApiStatus(false);
+        mqttClient.showConnectionAlert('API server returned an empty response.');
+      }
+    } catch (timeoutError) {
+      console.error('API status check timed out:', timeoutError);
+      mqttClient.updateApiStatus(false);
+      mqttClient.showConnectionAlert(
+        'API server is not responding (request timed out). Check if the backend is running on port 8000.'
+      );
+    }
   } catch (error) {
     console.error('Error checking API status:', error);
     mqttClient.updateApiStatus(false);
+    mqttClient.showConnectionAlert(
+      `API connection error: ${error.message}. Make sure the backend server is running.`
+    );
   }
 }

@@ -100,6 +100,9 @@ class MQTTHandler:
         # Message callback for external handlers
         self._message_callback: Optional[Callable] = None
         
+        # Connection callback for external handlers
+        self._connection_callback: Optional[Callable] = None
+        
         # Connection status
         self.connected = False
         self.last_reconnect_attempt = 0
@@ -329,6 +332,19 @@ class MQTTHandler:
         """Set callback for received messages"""
         self._message_callback = callback
 
+    def set_connection_callback(self, callback: Callable):
+        """Set callback for connection status changes"""
+        self._connection_callback = callback
+        
+        # Call the callback immediately with the current status
+        if callback and self._main_event_loop:
+            import asyncio
+            
+            async def _run_callback():
+                await callback(self.connected)
+            
+            asyncio.run_coroutine_threadsafe(_run_callback(), self._main_event_loop)
+
     def is_connected(self) -> bool:
         """Check if connected to MQTT broker"""
         return self.connected
@@ -437,6 +453,15 @@ class MQTTHandler:
             if self.persistence_enabled:
                 logger.info("Processing offline messages...")
                 self.process_offline_messages()
+            
+            # Trigger connection callback if set
+            if self._connection_callback and self._main_event_loop:
+                import asyncio
+                
+                async def _run_callback():
+                    await self._connection_callback(True)
+                
+                asyncio.run_coroutine_threadsafe(_run_callback(), self._main_event_loop)
         else:
             self.connected = False
             logger.error(f"Failed to connect to MQTT broker with code {rc}: {mqtt.connack_string(rc)}")
@@ -445,6 +470,16 @@ class MQTTHandler:
     def _on_disconnect(self, client, userdata, rc):
         """Callback for when the client disconnects from the broker"""
         self.connected = False
+        
+        # Trigger connection callback if set
+        if self._connection_callback and self._main_event_loop:
+            import asyncio
+            
+            async def _run_callback():
+                await self._connection_callback(False)
+            
+            asyncio.run_coroutine_threadsafe(_run_callback(), self._main_event_loop)
+        
         if rc != 0:
             logger.warning(f"Unexpected disconnection from MQTT broker with code {rc}")
             current_time = time.time()

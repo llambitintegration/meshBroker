@@ -23,6 +23,30 @@ body {
   margin-left: 0.5rem;
 }
 
+/* Improved navbar styles for better mobile experience */
+@media (max-width: 991.98px) {
+  .navbar-collapse {
+    background-color: #212529;
+    padding: 1rem;
+    border-radius: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  
+  .navbar-nav {
+    margin-bottom: 1rem;
+  }
+  
+  .nav-link {
+    padding: 0.5rem 0.75rem !important;
+    margin-bottom: 0.25rem;
+  }
+  
+  .nav-link.active {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 0.25rem;
+  }
+}
+
 /* Content pages */
 .page {
   display: none;
@@ -30,6 +54,16 @@ body {
 
 .page.active {
   display: block;
+}
+
+/* Add fade-in animation for smoother page transitions */
+.page.active {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
 }
 
 .card {
@@ -195,6 +229,29 @@ body {
   border: 1px solid rgba(0, 0, 0, 0.125);
   border-radius: 0.25rem;
   padding: 0.5rem;
+}
+
+/* Error message styling */
+.connection-alert {
+  margin-top: 1rem;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  0% { transform: translateY(-20px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+/* Reconnect button styling */
+.reconnect-button {
+  margin-top: 0.5rem;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
 }
 
 /* Responsive adjustments */
