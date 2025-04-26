@@ -1,14 +1,21 @@
 """
 Meshtastic device API endpoints for mesh broker
 """
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Body
 from fastapi.responses import JSONResponse
 from typing import Dict, List, Optional, Any
 import asyncio
 import logging
+from pydantic import BaseModel
 from ..models.database import get_db
 from .. import meshtastic_integration
 from ..auth.auth_dependencies import get_api_key
+
+# Pydantic models for request validation
+class ConnectionRequest(BaseModel):
+    connection_type: str
+    connection_params: Dict[str, Any]
+    device_id: Optional[str] = None
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -124,16 +131,14 @@ async def get_connected_devices(
 
 @router.post("/connect", response_model=Dict[str, Any])
 async def connect_device(
-    connection_type: str,
-    connection_params: Dict[str, Any],
-    device_id: Optional[str] = None,
+    request: ConnectionRequest = Body(...),
     api_key: str = Depends(get_api_key)
 ):
     """Connect to a Meshtastic device"""
     device_id = await meshtastic_integration.connect_device(
-        connection_type=connection_type,
-        connection_params=connection_params,
-        device_id=device_id
+        connection_type=request.connection_type,
+        connection_params=request.connection_params,
+        device_id=request.device_id
     )
     
     if device_id:

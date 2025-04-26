@@ -38,6 +38,9 @@ from backend.monitoring.monitoring import get_metrics_manager
 from backend.routers.status import router as status_router
 from backend.routers.status import set_mqtt_handler as set_status_mqtt_handler
 
+# Add meshtastic router
+from backend.routers.meshtastic import router as meshtastic_router
+
 # Configure logging
 log_level = configure_logging()
 logger = logging.getLogger(__name__)
@@ -213,6 +216,7 @@ app.include_router(mqtt_settings_router)
 app.include_router(ws_router)
 app.include_router(monitoring_router)
 app.include_router(status_router)  # Add the status router
+app.include_router(meshtastic_router)  # Add the meshtastic router
 
 # Add global variable to track MQTT connection status
 mqtt_status = {"status": "disconnected"}
@@ -635,185 +639,7 @@ async def get_meshtastic_stats(request: Request):
 
 # New endpoints for direct device management
 
-@app.get("/meshtastic/devices")
-@api_key_required
-async def get_meshtastic_devices(request: Request):
-    """Get all connected Meshtastic devices"""
-    try:
-        devices = meshtastic_integration.get_connected_devices()
-        return devices
-    except Exception as e:
-        logger.error(f"Error retrieving Meshtastic devices: {e}")
-        raise HTTPException(status_code=500, detail="Error retrieving Meshtastic devices")
-
-@app.get("/meshtastic/discover")
-@api_key_required
-async def discover_meshtastic_devices(
-    request: Request,
-    connection_type: str = "all"
-):
-    """Discover available Meshtastic devices"""
-    try:
-        if connection_type not in ["serial", "ble", "all"]:
-            raise HTTPException(status_code=400, detail="Invalid connection type. Must be 'serial', 'ble', or 'all'")
-        
-        devices = await meshtastic_integration.discover_devices(connection_type)
-        return devices
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error discovering Meshtastic devices: {e}")
-        raise HTTPException(status_code=500, detail="Error discovering Meshtastic devices")
-
-class DeviceConnectionRequest(BaseModel):
-    connection_type: str
-    connection_params: Dict[str, Any]
-    device_id: Optional[str] = None
-
-@app.post("/meshtastic/devices")
-@api_key_required
-async def connect_meshtastic_device(
-    request: Request,
-    connection_request: DeviceConnectionRequest
-):
-    """Connect to a Meshtastic device"""
-    try:
-        if connection_request.connection_type not in ["serial", "tcp", "ble"]:
-            raise HTTPException(status_code=400, detail="Invalid connection type. Must be 'serial', 'tcp', or 'ble'")
-        
-        device_id = await meshtastic_integration.connect_device(
-            connection_request.connection_type,
-            connection_request.connection_params,
-            connection_request.device_id
-        )
-        
-        if not device_id:
-            raise HTTPException(status_code=500, detail="Failed to connect to device")
-        
-        return {"device_id": device_id, "status": "connected"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error connecting to Meshtastic device: {e}")
-        raise HTTPException(status_code=500, detail="Error connecting to Meshtastic device")
-
-@app.delete("/meshtastic/devices/{device_id}")
-@api_key_required
-async def disconnect_meshtastic_device(
-    request: Request,
-    device_id: str
-):
-    """Disconnect from a Meshtastic device"""
-    try:
-        success = await meshtastic_integration.disconnect_device(device_id)
-        
-        if not success:
-            raise HTTPException(status_code=404, detail=f"Device {device_id} not found or already disconnected")
-        
-        return {"device_id": device_id, "status": "disconnected"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error disconnecting from Meshtastic device: {e}")
-        raise HTTPException(status_code=500, detail="Error disconnecting from Meshtastic device")
-
-@app.get("/meshtastic/devices/{device_id}/config")
-@api_key_required
-async def get_meshtastic_device_config(
-    request: Request,
-    device_id: Optional[str] = None
-):
-    """Get device configuration"""
-    try:
-        config = meshtastic_integration.get_device_config(device_id)
-        
-        if not config:
-            raise HTTPException(status_code=404, detail=f"Device {device_id} not found or has no configuration")
-        
-        return config
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error retrieving Meshtastic device configuration: {e}")
-        raise HTTPException(status_code=500, detail="Error retrieving Meshtastic device configuration")
-
-class ConfigUpdateRequest(BaseModel):
-    key: str
-    value: Any
-
-@app.post("/meshtastic/devices/{device_id}/config")
-@api_key_required
-async def set_meshtastic_device_config(
-    request: Request,
-    config_update: ConfigUpdateRequest,
-    device_id: Optional[str] = None
-):
-    """Set device configuration"""
-    try:
-        success = meshtastic_integration.set_device_config(
-            config_update.key,
-            config_update.value,
-            device_id
-        )
-        
-        if not success:
-            raise HTTPException(status_code=404, detail=f"Device {device_id} not found or configuration update failed")
-        
-        return {"status": "success", "message": f"Configuration {config_update.key} updated successfully"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating Meshtastic device configuration: {e}")
-        raise HTTPException(status_code=500, detail="Error updating Meshtastic device configuration")
-
-@app.get("/meshtastic/devices/{device_id}/channels")
-@api_key_required
-async def get_meshtastic_device_channels(
-    request: Request,
-    device_id: Optional[str] = None
-):
-    """Get device channel settings"""
-    try:
-        channels = meshtastic_integration.get_device_channels(device_id)
-        
-        if not channels:
-            raise HTTPException(status_code=404, detail=f"Device {device_id} not found or has no channels")
-        
-        return channels
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error retrieving Meshtastic device channels: {e}")
-        raise HTTPException(status_code=500, detail="Error retrieving Meshtastic device channels")
-
-class ChannelUpdateRequest(BaseModel):
-    settings: Dict[str, Any]
-    channel_index: int = 0
-
-@app.post("/meshtastic/devices/{device_id}/channels")
-@api_key_required
-async def set_meshtastic_device_channel(
-    request: Request,
-    channel_update: ChannelUpdateRequest,
-    device_id: Optional[str] = None
-):
-    """Set device channel settings"""
-    try:
-        success = meshtastic_integration.set_device_channel(
-            channel_update.settings,
-            channel_update.channel_index,
-            device_id
-        )
-        
-        if not success:
-            raise HTTPException(status_code=404, detail=f"Device {device_id} not found or channel update failed")
-        
-        return {"status": "success", "message": f"Channel {channel_update.channel_index} updated successfully"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating Meshtastic device channel: {e}")
-        raise HTTPException(status_code=500, detail="Error updating Meshtastic device channel")
+# Meshtastic device endpoints have been moved to the dedicated router in backend/routers/meshtastic.py
 
 # Legacy WebSocket endpoint (kept for backward compatibility)
 @app.websocket("/ws")

@@ -286,10 +286,14 @@ class DeviceManager:
         """Discover available serial devices"""
         try:
             # Define the timeout for port discovery (in seconds)
-            timeout_seconds = 15
+            # Using 30 seconds to match the frontend and router timeout
+            timeout_seconds = 30
             
             # Log that we're starting discovery
             logger.info("Starting serial port discovery with timeout of %s seconds", timeout_seconds)
+            
+            # Import meshtastic within the method scope to ensure it's available
+            import meshtastic
             
             # Use asyncio.wait_for to add a timeout
             try:
@@ -326,13 +330,30 @@ class DeviceManager:
                          "sudo usermod -a -G dialout $USER\n"
                          "Then log out and back in for changes to take effect.")
             elif system == 'darwin':  # macOS
-                advice = "You may need to grant permission to access USB devices in System Preferences."
+                advice = ("You may need to grant permission to access USB devices in System Preferences.\n"
+                          "Check that your user has access to /dev/tty* devices.")
             elif system == 'windows':
-                advice = "Try running the application as Administrator."
+                advice = ("Try the following:\n"
+                          "1. Run the application as Administrator\n"
+                          "2. Check if another application is using the COM port\n"
+                          "3. Verify the USB drivers are properly installed\n"
+                          "4. Try a different USB cable or port")
             else:
                 advice = "Check your user permissions for accessing serial ports."
+            
+            # Add serial port detection attempt for better diagnostics
+            try:
+                import serial.tools.list_ports
+                all_ports = list(serial.tools.list_ports.comports())
+                if all_ports:
+                    port_list = "\n".join([f"  - {p.device}: {p.description}" for p in all_ports])
+                    additional_info = f"\n\nDetected serial ports (not necessarily Meshtastic devices):\n{port_list}"
+                else:
+                    additional_info = "\n\nNo serial ports were detected. Please check your USB connections."
+            except Exception:
+                additional_info = ""
                 
-            raise PermissionError(f"Permission denied accessing serial ports. {advice}")
+            raise PermissionError(f"Permission denied accessing serial ports.\n{advice}{additional_info}")
             
         except (ImportError, ModuleNotFoundError) as e:
             # Missing dependencies
@@ -343,33 +364,114 @@ class DeviceManager:
         except FileNotFoundError as e:
             # Serial port was specified but doesn't exist
             logger.error(f"Serial port not found: {e}")
+            
+            # Attempt to detect available ports for better error messages
+            try:
+                import serial.tools.list_ports
+                all_ports = list(serial.tools.list_ports.comports())
+                if all_ports:
+                    port_list = "\n".join([f"  - {p.device}: {p.description}" for p in all_ports])
+                    additional_info = f"\n\nAvailable ports: \n{port_list}\n\nPlease verify you're using one of these ports."
+                else:
+                    additional_info = "\n\nNo serial ports were detected. Please check if your device is connected."
+            except Exception:
+                additional_info = ""
+            
+            import platform
+            system = platform.system().lower()
+            if system == 'windows':
+                driver_advice = ("\n\nOn Windows, you may need to install the correct drivers for your device. "
+                              "Check the device manufacturer's website for driver information.")
+            elif system == 'linux':
+                driver_advice = ("\n\nOn Linux, ensure the device is properly connected and that you have "
+                               "appropriate permissions for the /dev/tty* device.")
+            elif system == 'darwin':
+                driver_advice = ("\n\nOn macOS, check System Preferences > Security & Privacy "
+                               "to allow USB device access.")
+            else:
+                driver_advice = ""
+            
             raise FileNotFoundError(f"Specified serial port not found: {e}. "
-                                   "Please verify the device is connected.")
+                                   f"Please verify the device is connected and powered on.{additional_info}{driver_advice}")
                                    
         except Exception as e:
             # Handle general exceptions with helpful information
             error_msg = str(e)
             logger.error(f"Error discovering serial devices: {error_msg}")
             
+            # Attempt system diagnostics for better error reporting
+            import platform, os
+            system = platform.system().lower()
+            system_info = f"System: {platform.system()} {platform.version()}, Python: {platform.python_version()}"
+            
+            # Try to get meshtastic module version
+            try:
+                import meshtastic
+                mesh_version = f"Meshtastic Python API: {meshtastic.__version__}"
+            except:
+                mesh_version = "Meshtastic Python API: Unknown version"
+                
+            diagnostic_info = f"\n\nDiagnostic information:\n{system_info}\n{mesh_version}"
+            
+            # Specific error handling based on error message
             if "could not open port" in error_msg.lower():
                 # Port might be in use by another application
-                raise RuntimeError(f"Could not open serial port: {error_msg}. "
-                                  "The port may be in use by another application.")
+                advice = ("\n\nThe port may be in use by another application. Try:\n"
+                         "1. Close any other applications that might be using the port\n"
+                         "2. Disconnect and reconnect the device\n"
+                         "3. Restart the computer if the issue persists")
+                raise RuntimeError(f"Could not open serial port: {error_msg}.{advice}{diagnostic_info}")
+            
             elif "no such file or directory" in error_msg.lower():
                 # Device was likely disconnected
-                raise FileNotFoundError("No serial devices found. "
-                                      "Please verify the device is connected and powered on.")
+                advice = ("\n\nPlease try:\n"
+                        "1. Verify the device is connected and powered on\n"
+                        "2. Try a different USB port\n"
+                        "3. Check that the device appears in Device Manager (Windows) or lsusb (Linux)")
+                raise FileNotFoundError(f"No serial devices found. {advice}{diagnostic_info}")
+            
             elif "access denied" in error_msg.lower():
                 # Permission issue
-                raise PermissionError(f"Access denied to serial port: {error_msg}. "
-                                     "You may not have sufficient permissions.")
+                if system == 'windows':
+                    advice = ("\n\nYou may not have sufficient permissions. Try:\n"
+                              "1. Run the application as Administrator\n"
+                              "2. Check if the device is locked by another application")
+                elif system == 'linux':
+                    advice = ("\n\nYou may not have sufficient permissions. Try:\n"
+                              "1. Add your user to the dialout group: sudo usermod -a -G dialout $USER\n"
+                              "2. Set permissions: sudo chmod a+rw /dev/ttyUSB0 (replace with your device)")
+                elif system == 'darwin':  # macOS
+                    advice = ("\n\nYou may not have sufficient permissions. Try:\n"
+                              "1. Check System Preferences > Security & Privacy for device access permissions\n"
+                              "2. Set permissions: sudo chmod a+rw /dev/tty.* (for all serial devices)")
+                else:
+                    advice = "\n\nYou may not have sufficient permissions to access the device."
+                    
+                raise PermissionError(f"Access denied to serial port: {error_msg}.{advice}{diagnostic_info}")
+            
+            elif "timeout" in error_msg.lower():
+                # Timeout during connection/discovery
+                advice = ("\n\nThe operation timed out. Try:\n"
+                          "1. Verify the device is functioning correctly\n"
+                          "2. Increase the timeout value if many USB devices are connected\n"
+                          "3. Try restarting the device")
+                raise TimeoutError(f"Timeout during serial port discovery: {error_msg}.{advice}{diagnostic_info}")
+            
             else:
-                # General error case
-                raise RuntimeError(f"Error discovering serial devices: {error_msg}")
+                # General error case with additional diagnostic information
+                advice = ("\n\nGeneral troubleshooting steps:\n"
+                         "1. Verify the Meshtastic device is powered on\n"
+                         "2. Check that you have the correct port/device\n"
+                         "3. Try a different USB cable or port\n"
+                         "4. Restart the device and try again")
+                raise RuntimeError(f"Error discovering serial devices: {error_msg}.{advice}{diagnostic_info}")
     
     async def discover_ble_devices(self) -> List[Dict[str, str]]:
         """Discover available BLE devices"""
         try:
+            # Import meshtastic within the method scope to ensure it's available
+            import meshtastic
+            
             # This can be blocking, so run in a thread
             devices = await asyncio.to_thread(meshtastic.ble_interface.scanForDevices)
             
@@ -398,36 +500,99 @@ class DeviceManager:
             
         Returns:
             Device ID if successful, None otherwise
+            
+        Raises:
+            ValueError: If connection_type is invalid or parameters are missing
+            TimeoutError: If connection times out
+            RuntimeError: For general connection failures
+            PermissionError: For permission issues
         """
-        # Generate a device ID if not provided
-        if not device_id:
-            device_id = f"{connection_type}_{int(time.time())}"
-        
-        with self._lock:
-            # Check if device already exists
-            if device_id in self.devices:
-                logger.warning(f"Device {device_id} already exists")
-                return device_id
+        try:
+            # Validate connection type
+            valid_types = ['serial', 'tcp', 'ble']
+            if connection_type not in valid_types:
+                raise ValueError(f"Invalid connection type '{connection_type}'. Must be one of: {', '.join(valid_types)}")
             
-            # Create and connect the device
-            device = DeviceInterface(connection_type, connection_params)
+            # Validate parameters based on connection type
+            if connection_type == 'serial' and 'port' not in connection_params:
+                logger.warning("No port specified for serial connection, will attempt auto-discovery")
+            elif connection_type == 'tcp' and 'host' not in connection_params:
+                raise ValueError("TCP connection requires 'host' parameter")
+            elif connection_type == 'ble' and 'address' not in connection_params and 'name' not in connection_params:
+                raise ValueError("BLE connection requires either 'address' or 'name' parameter")
+                
+            # Generate a device ID if not provided
+            if not device_id:
+                device_id = f"{connection_type}_{int(time.time())}"
             
-            # This can be blocking, so run in a thread
-            connected = await asyncio.to_thread(device.connect)
+            logger.info(f"Connecting to {connection_type} device with ID '{device_id}'")
             
-            if connected:
-                self.devices[device_id] = device
+            with self._lock:
+                # Check if device already exists
+                if device_id in self.devices:
+                    device = self.devices[device_id]
+                    if device.connected:
+                        logger.info(f"Device {device_id} already connected")
+                        return device_id
+                    else:
+                        logger.info(f"Device {device_id} exists but is disconnected, reconnecting")
                 
-                # Set up event handlers
-                setup_event_handlers(device)
+                # Create the device interface
+                device = DeviceInterface(connection_type, connection_params)
                 
-                # Set as default if it's the first device
-                if not self.default_device:
-                    self.default_device = device_id
+                # This can be blocking, so run in a thread with timeout
+                try:
+                    connected = await asyncio.wait_for(
+                        asyncio.to_thread(device.connect),
+                        timeout=30.0  # 30 second timeout for connection
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(f"Connection to {connection_type} device timed out after 30 seconds")
+                    raise TimeoutError(f"Connection to {connection_type} device timed out after 30 seconds. "
+                                      "The device may be unresponsive or experiencing issues.")
                 
-                return device_id
-            else:
-                return None
+                if connected:
+                    self.devices[device_id] = device
+                    
+                    # Set up event handlers
+                    setup_event_handlers(device)
+                    
+                    # Set as default if it's the first device
+                    if not self.default_device:
+                        self.default_device = device_id
+                    
+                    logger.info(f"Successfully connected to {connection_type} device with ID '{device_id}'")
+                    return device_id
+                else:
+                    logger.error(f"Failed to connect to {connection_type} device")
+                    return None
+                    
+        except ValueError as e:
+            # Parameter validation errors
+            logger.error(f"Invalid parameters for device connection: {e}")
+            raise
+            
+        except TimeoutError as e:
+            # Connection timeout
+            logger.error(f"Connection timeout: {e}")
+            raise
+            
+        except PermissionError as e:
+            # Permission issues
+            logger.error(f"Permission error during device connection: {e}")
+            raise
+            
+        except Exception as e:
+            # Other unexpected errors
+            logger.error(f"Unexpected error connecting to device: {str(e)}")
+            
+            # Provide more helpful error message with the error details
+            import platform
+            system_info = f"System: {platform.system()} {platform.version()}"
+            error_detail = str(e)
+            
+            raise RuntimeError(f"Failed to connect to {connection_type} device: {error_detail}\n\n"
+                             f"Technical details:\n{system_info}\n{error_detail}")
     
     async def disconnect_device(self, device_id: str) -> bool:
         """
@@ -438,25 +603,71 @@ class DeviceManager:
             
         Returns:
             True if successful, False otherwise
+            
+        Raises:
+            RuntimeError: If an unexpected error occurs during disconnection
         """
-        with self._lock:
-            if device_id not in self.devices:
-                logger.warning(f"Device {device_id} not found")
-                return False
+        try:
+            with self._lock:
+                if device_id not in self.devices:
+                    logger.warning(f"Device {device_id} not found or already disconnected")
+                    return False
+                
+                device = self.devices[device_id]
+                if not device.connected:
+                    logger.info(f"Device {device_id} is already disconnected")
+                    return True
+                
+                logger.info(f"Disconnecting from device {device_id}")
+                
+                # This can be blocking, so run in a thread with timeout
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(device.disconnect),
+                        timeout=10.0  # 10 second timeout for disconnection
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"Disconnection from device {device_id} timed out, forcing disconnection")
+                    # Force the device to be marked as disconnected even if timeout
+                    device.connected = False
+                
+                # Keep the device in the dictionary but mark it as disconnected
+                # Instead of: del self.devices[device_id]
+                
+                # Update default device if needed
+                if self.default_device == device_id and not device.connected:
+                    # Find another connected device to set as default
+                    new_default = None
+                    for did, dev in self.devices.items():
+                        if did != device_id and dev.connected:
+                            new_default = did
+                            break
+                    
+                    self.default_device = new_default
+                    
+                    if new_default:
+                        logger.info(f"Default device changed from {device_id} to {new_default}")
+                    else:
+                        logger.info(f"Default device {device_id} disconnected, no new default set")
+                
+                logger.info(f"Successfully disconnected from device {device_id}")
+                return True
+                
+        except Exception as e:
+            # Handle unexpected errors during disconnection
+            logger.error(f"Error disconnecting from device {device_id}: {str(e)}")
             
-            device = self.devices[device_id]
+            # Try to force the device to be marked as disconnected
+            try:
+                if device_id in self.devices:
+                    self.devices[device_id].connected = False
+                    logger.info(f"Forced device {device_id} to disconnected state after error")
+            except:
+                pass
             
-            # This can be blocking, so run in a thread
-            await asyncio.to_thread(device.disconnect)
-            
-            # Keep the device in the dictionary but mark it as disconnected
-            # Instead of: del self.devices[device_id]
-            
-            # Update default device if needed
-            if self.default_device == device_id and not device.connected:
-                self.default_device = next(iter(self.devices)) if self.devices else None
-            
-            return True
+            # Propagate the error with more context
+            raise RuntimeError(f"Failed to disconnect from device {device_id}: {str(e)}. "
+                             "The device may still be partially connected.")
     
     def get_device(self, device_id: Optional[str] = None) -> Optional[DeviceInterface]:
         """

@@ -26,13 +26,15 @@ def main():
     parser.add_argument("--unit", action="store_true", help="Run mock-based unit tests")
     parser.add_argument("--hardware", action="store_true", help="Run hardware integration tests")
     parser.add_argument("--all", action="store_true", help="Run all tests")
+    parser.add_argument("--router", action="store_true", help="Run router API tests with mocks")
+    parser.add_argument("--simulation", action="store_true", help="Run simulated device integration tests")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
-    parser.add_argument("--timeout", type=int, default=5, 
+    parser.add_argument("--timeout", type=int, default=30, 
                         help="Timeout for hardware operations (seconds)")
     args = parser.parse_args()
     
     # If no options are specified, default to running unit tests
-    if not (args.unit or args.hardware or args.all):
+    if not (args.unit or args.hardware or args.all or args.router or args.simulation):
         args.unit = True
     
     # Set up environment variables for hardware tests
@@ -57,10 +59,18 @@ def main():
     if args.all:
         cmd.append(os.path.join(tests_dir, "test_direct_meshtastic.py"))
         cmd.append(os.path.join(tests_dir, "test_direct_meshtastic_integration.py"))
+        cmd.append(os.path.join(tests_dir, "test_meshtastic_router.py"))
+        cmd.append(os.path.join(tests_dir, "test_meshtastic_router_simulation.py"))
+        cmd.append(os.path.join(tests_dir, "test_meshtastic_router_integration.py"))
     elif args.unit:
         cmd.append(os.path.join(tests_dir, "test_direct_meshtastic.py"))
     elif args.hardware:
         cmd.append(os.path.join(tests_dir, "test_direct_meshtastic_integration.py"))
+        cmd.append(os.path.join(tests_dir, "test_meshtastic_router_integration.py"))
+    elif args.router:
+        cmd.append(os.path.join(tests_dir, "test_meshtastic_router.py"))
+    elif args.simulation:
+        cmd.append(os.path.join(tests_dir, "test_meshtastic_router_simulation.py"))
     
     # Use the rootdir option to specify exactly where to look for tests
     cmd.append(f"--rootdir={backend_dir}")

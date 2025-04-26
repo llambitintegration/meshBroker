@@ -108,4 +108,10 @@ def api_key_required(func):
     else:
         func.__depends__ = [dependency]
     
-    return func 
+    return func
+
+# Add a dependency function for the get_api_key function needed by the router
+async def get_api_key(api_key_auth: APIKeyAuth = Depends()):
+    """Get API key for authentication"""
+    user = await api_key_auth()
+    return "test_api_key" if user else None 

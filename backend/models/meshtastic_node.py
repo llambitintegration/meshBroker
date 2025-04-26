@@ -53,6 +53,30 @@ class MeshtasticNode:
     
     _db_path = "mqtt_data/meshtastic_nodes.db"
     
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert node to dictionary for API responses"""
+        position_dict = {
+            "latitude": self.position.latitude,
+            "longitude": self.position.longitude,
+            "altitude": self.position.altitude,
+            "time": self.position.time
+        } if self.position else None
+        
+        return {
+            "node_id": self.node_id,
+            "name": self.name,
+            "user_short_name": self.user_short_name,
+            "position": position_dict,
+            "last_seen": self.last_seen,
+            "battery_level": self.battery_level,
+            "voltage": self.voltage,
+            "snr": self.snr,
+            "rssi": self.rssi,
+            "group": self.group,
+            "category": self.category,
+            "is_active": self.is_active
+        }
+    
     def __init__(
         self,
         node_id: str,

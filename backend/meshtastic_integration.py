@@ -203,11 +203,15 @@ async def periodic_node_sync():
 
 def get_nodes(active_only=True, group=None, category=None):
     """Get list of known Meshtastic nodes with optional filtering"""
-    return MeshtasticNode.get_all(active_only=active_only, group=group, category=category)
+    nodes = MeshtasticNode.get_all(active_only=active_only, group=group, category=category)
+    # Convert node objects to dictionaries for API responses
+    return [node.to_dict() for node in nodes]
 
 def get_node(node_id):
     """Get a specific node by ID"""
-    return MeshtasticNode.get(node_id)
+    node = MeshtasticNode.get(node_id)
+    # Convert node object to dictionary for API response
+    return node.to_dict() if node else None
 
 def update_node_group(node_id, group):
     """Update a node's group"""
