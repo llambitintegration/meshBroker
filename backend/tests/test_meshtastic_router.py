@@ -291,10 +291,13 @@ class TestMeshtasticRouter:
     
     def test_connect_device_success(self, test_client, mock_meshtastic_integration):
         """Test connecting to a device successfully"""
-        # Pass the correct parameters in the URL for connection_type
+        # Pass the parameters in the request body as expected by Pydantic model
         response = test_client.post(
-            "/meshtastic/connect?connection_type=serial",
-            json={"connection_params": {"port": "/dev/mock_port_1"}}
+            "/meshtastic/connect",
+            json={
+                "connection_type": "serial",
+                "connection_params": {"port": "/dev/mock_port_1"}
+            }
         )
         
         assert response.status_code == 200
@@ -309,19 +312,20 @@ class TestMeshtasticRouter:
         call_args = mock_meshtastic_integration.connect_device.call_args[1]
         assert call_args["connection_type"] == "serial"
         assert "connection_params" in call_args
-        # Extract the nested port parameter
-        assert "port" in call_args["connection_params"]["connection_params"]
-        assert call_args["connection_params"]["connection_params"]["port"] == "/dev/mock_port_1"
+        assert call_args["connection_params"]["port"] == "/dev/mock_port_1"
     
     def test_connect_device_failure(self, test_client, mock_meshtastic_integration):
         """Test connecting to a device with failure"""
         # Make the connect_device function return None to simulate failure
         mock_meshtastic_integration.connect_device.return_value = None
         
-        # Pass the correct parameters in the URL for connection_type
+        # Pass the parameters in the request body as expected by Pydantic model
         response = test_client.post(
-            "/meshtastic/connect?connection_type=serial",
-            json={"connection_params": {"port": "/dev/nonexistent"}}
+            "/meshtastic/connect",
+            json={
+                "connection_type": "serial",
+                "connection_params": {"port": "/dev/nonexistent"}
+            }
         )
         
         assert response.status_code == 500
@@ -334,9 +338,7 @@ class TestMeshtasticRouter:
         call_args = mock_meshtastic_integration.connect_device.call_args[1]
         assert call_args["connection_type"] == "serial"
         assert "connection_params" in call_args
-        # Extract the nested port parameter
-        assert "port" in call_args["connection_params"]["connection_params"]
-        assert call_args["connection_params"]["connection_params"]["port"] == "/dev/nonexistent"
+        assert call_args["connection_params"]["port"] == "/dev/nonexistent"
     
     def test_disconnect_device_success(self, test_client, mock_meshtastic_integration):
         """Test disconnecting from a device successfully"""
