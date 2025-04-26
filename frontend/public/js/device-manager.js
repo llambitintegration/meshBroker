@@ -24,6 +24,26 @@ class DeviceManager {
     // Add discovery timeout property
     this.discoveryTimeout = null;
     
+    // Store button references
+    this.discoverSerialBtn = document.getElementById('discover-serial-btn');
+    this.discoverBleBtn = document.getElementById('discover-ble-btn');
+    this.discoverAllBtn = document.getElementById('discover-all-btn');
+    this.connectDeviceForm = document.getElementById('connect-device-form');
+    
+    // Check that required elements exist
+    if (!this.deviceListElement) {
+      console.error('Device list element not found');
+    }
+    
+    if (!this.serialDevicesElement) {
+      console.error('Serial devices element not found');
+    }
+    
+    if (!this.bleDevicesElement) {
+      console.error('BLE devices element not found');
+    }
+    
+    // Initialize event listeners
     this.initEventListeners();
   }
   
@@ -31,16 +51,50 @@ class DeviceManager {
    * Initialize event listeners
    */
   initEventListeners() {
+    console.log('Initializing device manager event listeners');
+    
     // Device discovery
-    document.getElementById('discover-serial-btn').addEventListener('click', () => this.discoverDevices('serial'));
-    document.getElementById('discover-ble-btn').addEventListener('click', () => this.discoverDevices('ble'));
-    document.getElementById('discover-all-btn').addEventListener('click', () => this.discoverDevices('all'));
+    if (this.discoverSerialBtn) {
+      console.log('Adding click handler for discover-serial-btn');
+      this.discoverSerialBtn.addEventListener('click', () => {
+        console.log('Discover serial button clicked');
+        this.discoverDevices('serial');
+      });
+    } else {
+      console.error('Discover serial button not found');
+    }
+    
+    if (this.discoverBleBtn) {
+      console.log('Adding click handler for discover-ble-btn');
+      this.discoverBleBtn.addEventListener('click', () => {
+        console.log('Discover BLE button clicked');
+        this.discoverDevices('ble');
+      });
+    } else {
+      console.error('Discover BLE button not found');
+    }
+    
+    if (this.discoverAllBtn) {
+      console.log('Adding click handler for discover-all-btn');
+      this.discoverAllBtn.addEventListener('click', () => {
+        console.log('Discover all button clicked');
+        this.discoverDevices('all');
+      });
+    } else {
+      console.error('Discover all button not found');
+    }
     
     // Device connection form
-    document.getElementById('connect-device-form').addEventListener('submit', (e) => {
-      e.preventDefault();
-      this.connectDevice();
-    });
+    if (this.connectDeviceForm) {
+      console.log('Adding submit handler for connect-device-form');
+      this.connectDeviceForm.addEventListener('submit', (e) => {
+        console.log('Connect device form submitted');
+        e.preventDefault();
+        this.connectDevice();
+      });
+    } else {
+      console.error('Connect device form not found');
+    }
     
     // Config form submission
     if (this.configFormElement) {
@@ -895,15 +949,43 @@ class DeviceManager {
   }
   
   /**
-   * Initialize the device manager UI
+   * Initialize the device manager
+   * This method is called when the page loads
    */
   async init() {
-    // Load connected devices
-    await this.loadConnectedDevices();
-    
-    // If on device config page, load device config
-    if (window.location.pathname.includes('device-config.html')) {
-      await this.loadDeviceConfig();
+    console.log('Initializing device manager');
+    try {
+      // Load connected devices
+      await this.loadConnectedDevices();
+      
+      // Check if API key is set and show appropriate status
+      const connectionStatus = document.getElementById('connection-status');
+      if (connectionStatus) {
+        if (this.mqttClient.getApiKey()) {
+          connectionStatus.innerHTML = '<i class="fas fa-circle text-success"></i> API Key Set';
+        } else {
+          connectionStatus.innerHTML = '<i class="fas fa-circle text-danger"></i> API Key Required';
+        }
+      }
+      
+      console.log('Device manager initialized successfully');
+    } catch (error) {
+      console.error('Error initializing device manager:', error);
+      // Show error message
+      if (this.deviceListElement) {
+        this.deviceListElement.innerHTML = `
+          <div class="list-group-item text-center text-danger">
+            <i class="fas fa-exclamation-triangle me-2"></i>
+            Initialization error
+          </div>
+          <div class="list-group-item">
+            <p class="mb-2">Error: ${error.message || 'Unknown error'}</p>
+            <button class="btn btn-sm btn-primary w-100" onclick="location.reload()">
+              <i class="fas fa-sync me-2"></i>Reload Page
+            </button>
+          </div>
+        `;
+      }
     }
   }
   

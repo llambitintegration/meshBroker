@@ -2,13 +2,17 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { request } = require('http');
+const { URL } = require('url');
 
 const port = process.env.PORT || 5000;
 const publicDir = path.join(__dirname, 'public');
+const backendUrl = process.env.BACKEND_URL || 'http://localhost:8000';
 
 // Log startup info
 console.log(`Starting server on port ${port}`);
 console.log(`Serving static files from: ${publicDir}`);
+console.log(`Backend API URL: ${backendUrl}`);
 
 const mimeTypes = {
   '.html': 'text/html',
@@ -28,13 +32,71 @@ const mimeTypes = {
   '.wasm': 'application/wasm'
 };
 
+// Helper function to proxy requests to the backend
+function proxyRequest(req, res, targetPath) {
+  // Parse the backend URL
+  const backendUrlObj = new URL(backendUrl);
+  
+  // Create options for the proxied request
+  const options = {
+    hostname: backendUrlObj.hostname,
+    port: backendUrlObj.port,
+    path: targetPath,
+    method: req.method,
+    headers: {
+      ...req.headers,
+      host: backendUrlObj.host, // Override the host header
+    }
+  };
+  
+  console.log(`Proxying request to backend: ${req.method} ${targetPath} -> ${backendUrlObj.hostname}:${backendUrlObj.port}${targetPath}`);
+  
+  // Create the proxied request
+  const proxyReq = request(options, (proxyRes) => {
+    // Copy the status code
+    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+    
+    // Log the response
+    console.log(`Backend responded: ${proxyRes.statusCode} for ${req.method} ${targetPath}`);
+    
+    // Pipe the response data
+    proxyRes.pipe(res);
+  });
+  
+  // Handle errors
+  proxyReq.on('error', (error) => {
+    console.error(`Error proxying request to ${targetPath}:`, error);
+    res.writeHead(502);
+    res.end(JSON.stringify({ 
+      error: 'Backend server error', 
+      message: error.message,
+      code: error.code || 'UNKNOWN_ERROR'
+    }));
+  });
+  
+  // Set a timeout for the proxy request
+  proxyReq.setTimeout(10000, () => {
+    console.error(`Timeout proxying request to ${targetPath}`);
+    proxyReq.destroy();
+    res.writeHead(504);
+    res.end(JSON.stringify({ error: 'Gateway Timeout', message: 'Backend server did not respond in time' }));
+  });
+  
+  // If there's request data, pipe it to the proxied request
+  if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+    req.pipe(proxyReq);
+  } else {
+    proxyReq.end();
+  }
+}
+
 const server = http.createServer((req, res) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
   
   // Enable CORS for all requests
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, Authorization');
   
   // Handle OPTIONS requests for CORS preflight
   if (req.method === 'OPTIONS') {
@@ -43,13 +105,48 @@ const server = http.createServer((req, res) => {
     return;
   }
   
-  // Handle API health check
-  if (req.url === '/api/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
+  // Proxy API requests to the backend
+  if (req.url.startsWith('/status') || 
+      req.url.startsWith('/broker_status') || 
+      req.url.startsWith('/api/') || 
+      req.url.startsWith('/auth/') ||
+      req.url.startsWith('/meshtastic/') ||
+      req.url.startsWith('/topics') ||
+      req.url.startsWith('/subscribe') ||
+      req.url.startsWith('/unsubscribe') ||
+      req.url.startsWith('/publish') ||
+      req.url.startsWith('/ws')) {
+    // For WebSocket upgrade requests, special handling is needed
+    if (req.url.startsWith('/ws') && req.headers.upgrade && req.headers.upgrade.toLowerCase() === 'websocket') {
+      res.writeHead(400);
+      res.end('WebSocket connections should be made directly to the backend server');
+      return;
+    }
+    
+    // Special handling for API health endpoint for better debugging
+    if (req.url === '/api/health') {
+      console.log('Received health check request, proxying to backend');
+    }
+    
+    // Proxy the request to the backend
+    proxyRequest(req, res, req.url);
     return;
   }
   
+  // Handle redirect for backward compatibility
+  if (req.url === '/api/health') {
+    proxyRequest(req, res, '/status');
+    return;
+  }
+  
+  // Handle redirects for common mistakes
+  if (req.url === '/device.html' || req.url === '/device') {
+    // Redirect to the correct devices.html page
+    res.writeHead(302, { 'Location': '/devices.html' });
+    res.end();
+    return;
+  }
+
   // Clean up URL and get the file path
   let filePath;
   if (req.url === '/' || req.url === '') {
@@ -67,8 +164,16 @@ const server = http.createServer((req, res) => {
   fs.stat(filePath, (err, stats) => {
     if (err || !stats.isFile()) {
       console.log(`File not found or not a file: ${filePath}`);
-      // File not found, serve index.html for SPA
-      filePath = path.join(publicDir, 'index.html');
+      
+      // For HTML requests, redirect to index.html for SPA
+      if (req.url.endsWith('.html') || req.url.indexOf('.') === -1) {
+        filePath = path.join(publicDir, 'index.html');
+      } else {
+        // For non-HTML resources, return 404
+        res.writeHead(404);
+        res.end('404 Not Found');
+        return;
+      }
     }
     
     // Get file extension and content type

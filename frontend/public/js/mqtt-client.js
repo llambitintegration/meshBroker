@@ -137,7 +137,28 @@ class MQTTClient {
         }
       }
       
-      // Check API status
+      // First try the direct health endpoint
+      console.log('Checking API health...');
+      try {
+        const healthResponse = await fetch(`${this.apiBaseUrl}/api/health`, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          signal: AbortSignal.timeout(3000)
+        });
+        
+        if (healthResponse.ok) {
+          console.log('API health check succeeded');
+          this.updateApiStatus(true);
+        } else {
+          console.warn('API health check failed, will try status endpoint');
+          // Don't update API status yet, we'll try the status endpoint
+        }
+      } catch (error) {
+        console.warn('Error checking API health, will try status endpoint:', error);
+        // Don't update API status yet, we'll try the status endpoint
+      }
+      
+      // Check API status via the status endpoint
       console.log('Checking API status...');
       try {
         const statusResponse = await this.checkStatus();
@@ -248,88 +269,44 @@ class MQTTClient {
         this.channelId = null;
         this.updateMqttStatus(false);
         
-        // Show detailed info about connection closure
-        const closeReason = event.reason ? event.reason : 'Connection closed';
-        console.log(`WebSocket close code: ${event.code}, reason: ${closeReason}`);
-        
-        // Try to reconnect with exponential backoff
+        // Try to reconnect automatically if not too many attempts
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
-          const backoffTime = this.reconnectInterval * Math.pow(1.5, this.reconnectAttempts);
           this.reconnectAttempts++;
-          console.log(`Reconnecting (attempt ${this.reconnectAttempts}) in ${backoffTime}ms...`);
-          this.reconnectTimer = setTimeout(() => this.connectWebSocket(), backoffTime);
+          console.log(`Reconnecting in ${this.reconnectInterval}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
           
-          // Update status to show reconnecting
-          this.updateMqttStatus('reconnecting');
+          // Show connection alert with reconnect info
+          this.showConnectionAlert(`Connection to the server lost. Automatically reconnecting... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+          
+          this.reconnectTimer = setTimeout(() => {
+            this.connectWebSocket();
+          }, this.reconnectInterval);
         } else {
-          console.error('Max reconnection attempts reached');
-          // Show reconnection button to user
+          console.error('Maximum reconnection attempts reached');
+          this.showConnectionAlert('Connection to the server failed after multiple attempts. Please check the server status and click "Reconnect" to try again.');
+          
+          // Show manual reconnect button
           this.showReconnectButton();
-          // Show alert about connection issues
-          this.showConnectionAlert('WebSocket connection failed after multiple attempts');
         }
       };
       
       this.ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        this.connected = false;
-        this.updateMqttStatus(false);
-        
-        // Additional error details in console
-        console.log('WebSocket error details:', {
-          readyState: this.ws ? this.ws.readyState : 'No WebSocket',
-          url: wsUrl,
-          error: error.message || 'Unknown error'
-        });
+        console.error('WebSocket connection error:', error);
+        // Error handling is done in onclose
       };
       
       this.ws.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
-          
-          // Handle ping messages immediately
-          if (message.type === 'ping') {
-            console.log('Received ping from server, responding with pong');
-            // Respond with pong immediately to maintain connection
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-              this.ws.send(JSON.stringify({ 
-                type: 'pong', 
-                timestamp: message.timestamp || Date.now() 
-              }));
-            }
-            return;
-          }
-          
-          // Handle channel assignment response
-          if (message.type === 'channel_assignment') {
-            this.channelId = message.channel_id;
-            console.log(`Assigned to channel: ${this.channelId}`);
-            
-            // Subscribe to previously subscribed topics in the new channel
-            this.resubscribeTopics();
-            return;
-          }
-          
           this.handleMessage(message);
-        } catch (error) {
-          console.error('Error parsing WebSocket message:', error);
-          console.log('Raw message data:', event.data);
+        } catch (e) {
+          console.error('Error parsing WebSocket message:', e, event.data);
         }
       };
     } catch (error) {
-      console.error('Error connecting to WebSocket:', error);
+      console.error('Error creating WebSocket connection:', error);
       this.updateMqttStatus(false);
-      
-      // Show detailed connection error
-      this.showConnectionAlert(`Failed to connect to WebSocket: ${error.message}`);
-      
-      // Try to reconnect
-      if (this.reconnectAttempts < this.maxReconnectAttempts) {
-        this.reconnectAttempts++;
-        const backoffTime = this.reconnectInterval * Math.pow(1.5, this.reconnectAttempts);
-        console.log(`Reconnecting (attempt ${this.reconnectAttempts}) in ${backoffTime}ms...`);
-        this.reconnectTimer = setTimeout(() => this.connectWebSocket(), backoffTime);
-      }
+      this.showConnectionAlert('Failed to establish WebSocket connection. The server might be down or unreachable.');
+      this.showReconnectButton();
     }
   }
 
@@ -454,75 +431,59 @@ class MQTTClient {
   }
 
   /**
-   * Check API and MQTT status
-   * @returns {Promise<object>} - Status object
+   * Check the status of the API server and MQTT broker
+   * @returns {Promise<Object|null>} - Status object or null if error
    */
   async checkStatus() {
     try {
       console.log('Checking API status...');
-      
       // First, check if the API is reachable at all
-      let statusUrl = `${this.apiBaseUrl}/status`;
+      const healthResponse = await fetch(`${this.apiBaseUrl}/status`, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        // Set a timeout to prevent hanging on unreachable server
+        signal: AbortSignal.timeout(3000)
+      });
       
-      try {
-        // Use a shorter timeout for the initial API status check
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-        
-        const response = await fetch(statusUrl, {
-          method: 'GET',
-          signal: controller.signal
-        });
-        
-        // Clear the timeout
-        clearTimeout(timeoutId);
-        
-        if (!response.ok) {
-          console.warn(`API status check failed with status: ${response.status}`);
-          this.updateApiStatus(false);
-          return { status: 'error', message: 'API server is not responding properly' };
-        }
-        
-        const data = await response.json();
-        console.log('API status response:', data);
-        
-        // Update status indicators
-        const apiConnected = data.api_status === 'ok';
-        const mqttConnected = data.mqtt_status === 'connected';
-        
-        this.updateApiStatus(apiConnected);
-        this.updateMqttStatus(mqttConnected);
-        
-        return {
-          status: mqttConnected ? 'connected' : 'disconnected',
-          api_status: apiConnected ? 'ok' : 'error',
-          mqtt_status: data.mqtt_status,
-          message: data.message || 'API is responding correctly'
-        };
-        
-      } catch (error) {
-        // Handle network errors or timeouts
-        console.error('Error checking API status:', error);
-        
-        // Check if this was an abort error (timeout)
-        if (error.name === 'AbortError') {
-          console.warn('API status check timed out after 5 seconds');
-          this.updateApiStatus(false);
-          return { status: 'error', message: 'API server request timed out' };
-        }
-        
-        // Other network error
+      if (!healthResponse.ok) {
+        console.error('API status check failed:', healthResponse.status);
         this.updateApiStatus(false);
-        return { 
-          status: 'error', 
-          message: 'Cannot connect to API server. Please check that the server is running.'
-        };
+        this.showConnectionAlert('Cannot reach the API server. Please check if the backend is running.');
+        return null;
       }
+      
+      // Now check MQTT broker connection status
+      const response = await fetch(`${this.apiBaseUrl}/status/broker`, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(3000)
+      });
+      
+      if (!response.ok) {
+        console.error('Broker status check failed:', response.status);
+        this.updateApiStatus(false);
+        return null;
+      }
+      
+      const data = await response.json();
+      console.log('Broker status:', data);
+      
+      // Update UI based on status
+      this.updateApiStatus(data.status === 'connected');
+      
+      return data;
     } catch (error) {
-      console.error('Unexpected error in checkStatus:', error);
+      console.error('Error checking status:', error);
       this.updateApiStatus(false);
-      this.updateMqttStatus(false);
-      return { status: 'error', message: 'Unexpected error checking status' };
+      
+      // Check if it's a timeout error
+      if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+        this.showConnectionAlert('Connection to the API server timed out. The server might be down or unreachable.');
+      } else {
+        this.showConnectionAlert('Error connecting to the API. Please check if the backend is running.');
+      }
+      
+      return null;
     }
   }
 
@@ -853,26 +814,72 @@ class MQTTClient {
   }
 
   /**
-   * Show reconnection button in the UI
+   * Show a reconnect button in the connection alert
    */
   showReconnectButton() {
-    const statusElement = document.getElementById('mqtt-status');
-    if (statusElement) {
-      statusElement.innerHTML = `
-        <i class="fas fa-exclamation-triangle"></i> 
-        MQTT: Disconnected 
-        <button id="manual-reconnect" class="btn btn-sm btn-outline-light ms-2">
-          <i class="fas fa-sync-alt"></i> Reconnect
-        </button>
+    const alertContainer = document.getElementById('connection-alert-container');
+    if (!alertContainer) {
+      console.warn('Connection alert container not found, creating one');
+      const container = document.createElement('div');
+      container.id = 'connection-alert-container';
+      container.className = 'alert-container';
+      document.body.appendChild(container);
+    }
+    
+    const existingAlert = document.getElementById('connection-alert');
+    if (existingAlert) {
+      // Check if button already exists
+      if (existingAlert.querySelector('button')) {
+        return;
+      }
+      
+      // Add reconnect button
+      const reconnectButton = document.createElement('button');
+      reconnectButton.className = 'btn btn-sm btn-primary mt-2';
+      reconnectButton.innerHTML = '<i class="fas fa-sync-alt me-1"></i> Reconnect';
+      
+      reconnectButton.addEventListener('click', () => {
+        console.log('Manual reconnect initiated');
+        this.reconnectAttempts = 0;
+        this.connectWebSocket();
+      });
+      
+      existingAlert.appendChild(reconnectButton);
+    } else {
+      // Create new alert with button if none exists
+      const alertDiv = document.createElement('div');
+      alertDiv.id = 'connection-alert';
+      alertDiv.className = 'alert alert-warning';
+      alertDiv.innerHTML = `
+        <strong>Connection Error</strong>
+        <p>Could not connect to the server. Please check if the backend is running.</p>
       `;
       
-      // Add click handler to the reconnect button
-      const reconnectButton = document.getElementById('manual-reconnect');
-      if (reconnectButton) {
-        reconnectButton.addEventListener('click', () => {
-          this.reconnectAttempts = 0;
-          this.connectWebSocket();
-        });
+      const reconnectButton = document.createElement('button');
+      reconnectButton.className = 'btn btn-sm btn-primary mt-2';
+      reconnectButton.innerHTML = '<i class="fas fa-sync-alt me-1"></i> Reconnect';
+      
+      reconnectButton.addEventListener('click', () => {
+        console.log('Manual reconnect initiated');
+        this.reconnectAttempts = 0;
+        this.connectWebSocket();
+      });
+      
+      alertDiv.appendChild(reconnectButton);
+      
+      // Find a suitable container
+      const container = document.getElementById('connection-alert-container') || 
+                        document.querySelector('.container') || 
+                        document.querySelector('.container-fluid') ||
+                        document.body;
+      
+      if (container) {
+        // Insert at the beginning of the container
+        if (container.firstChild) {
+          container.insertBefore(alertDiv, container.firstChild);
+        } else {
+          container.appendChild(alertDiv);
+        }
       }
     }
   }

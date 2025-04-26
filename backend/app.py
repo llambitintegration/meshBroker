@@ -156,6 +156,16 @@ manager = ConnectionManager()
 from backend.ws.routes import connection_manager as enhanced_manager
 from backend.ws.routes import channel_manager
 
+# Add a generic health endpoint for frontend to check
+@app.get("/api/health")
+def health_check():
+    """Health check endpoint for the frontend"""
+    return {
+        "status": "ok",
+        "timestamp": int(time.time()),
+        "service": "Meshtastic MQTT Bridge API"
+    }
+
 # Models
 class MQTTMessage(BaseModel):
     topic: str
