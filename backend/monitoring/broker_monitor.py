@@ -284,6 +284,26 @@ class BrokerHealthCheck:
             # MQTT protocol is not responding
             self.metrics["consecutive_failures"] += 1
             self.metrics["failed_checks"] += 1
+            
+            # If we've been in DEGRADED state for too long, try to force reconnect
+            if (self.status == BrokerStatus.DEGRADED and 
+                self.metrics["consecutive_failures"] >= 3 and 
+                self._mqtt_client):
+                try:
+                    logger.warning("Broker in DEGRADED state for multiple checks, attempting to force reconnect")
+                    self._mqtt_client.reconnect()
+                    # Give it a chance to reconnect
+                    time.sleep(1)
+                    # Re-check connectivity
+                    mqtt_check = self._check_mqtt_connectivity()
+                    if mqtt_check:
+                        logger.info("MQTT reconnection successful, broker recovered")
+                        self.metrics["consecutive_failures"] = 0
+                        self._update_status(BrokerStatus.HEALTHY)
+                        return
+                except Exception as e:
+                    logger.error(f"Error during forced reconnection: {e}")
+            
             self._update_status(BrokerStatus.DEGRADED)
             return
         

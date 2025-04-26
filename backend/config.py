@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     BROKER_CHECK_INTERVAL: float = float(os.getenv("BROKER_CHECK_INTERVAL", 30.0))
     
     # Meshtastic settings
-    MESHTASTIC_TOPIC_PREFIX: str = os.getenv("MESHTASTIC_TOPIC_PREFIX", "msh/tx/")
+    MESHTASTIC_TOPIC_PREFIX: str = os.getenv("MESHTASTIC_TOPIC_PREFIX", "msh/Bob/")
     MESHTASTIC_RECONNECT_INTERVAL: int = int(os.getenv("MESHTASTIC_RECONNECT_INTERVAL", 10))
     
     # API settings

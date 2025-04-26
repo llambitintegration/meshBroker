@@ -94,4 +94,18 @@ class APIKeyAuth:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="API key authentication failed"
-            ) 
+            )
+
+# Add this new decorator function
+def api_key_required(func):
+    """Decorator for routes that require API key authentication"""
+    # Use FastAPI's dependency injection system to properly handle the async dependency
+    dependency = Depends(APIKeyAuth())
+    
+    # Update the function signature to include the dependency
+    if hasattr(func, "__depends__"):
+        func.__depends__.append(dependency)
+    else:
+        func.__depends__ = [dependency]
+    
+    return func 

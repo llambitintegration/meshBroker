@@ -30,13 +30,28 @@ class MessageStore:
         """Initialize the message store"""
         self.db_path = db_path
         self.max_retries = max_retries
+        self.connection = None
         self._init_db()
         logger.info(f"Message store initialized with database at {db_path}")
+    
+    def _get_connection(self):
+        """Get a database connection, creating a new one if needed"""
+        if self.connection is None:
+            self.connection = sqlite3.connect(
+                self.db_path, 
+                timeout=30.0,  # Increase timeout for busy conditions
+                isolation_level="IMMEDIATE"  # Reduce contention
+            )
+            # Enable WAL mode for better concurrency
+            self.connection.execute("PRAGMA journal_mode=WAL")
+            # Set busy timeout
+            self.connection.execute("PRAGMA busy_timeout=30000")
+        return self.connection
     
     def _init_db(self):
         """Initialize the SQLite database for message storage"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
             # Create messages table if it doesn't exist
@@ -54,11 +69,17 @@ class MessageStore:
             )
             ''')
             
+            # Add indexes for better performance
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_messages_next_retry ON messages(next_retry)')
+            
             conn.commit()
-            conn.close()
             logger.info("Message database initialized")
         except Exception as e:
             logger.error(f"Error initializing message database: {e}")
+            if self.connection:
+                self.connection.close()
+                self.connection = None
             raise
     
     def store_message(self, message_id: str, topic: str, payload: Any, qos: int = 0, 
@@ -69,7 +90,7 @@ class MessageStore:
             if isinstance(payload, dict) or isinstance(payload, list):
                 payload = json.dumps(payload)
             
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
             cursor.execute(
@@ -92,9 +113,17 @@ class MessageStore:
             )
             
             conn.commit()
-            conn.close()
             logger.debug(f"Stored message {message_id} for topic {topic}")
             return True
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                logger.warning(f"Database lock detected while storing message: {e}")
+                # Close and reopen connection on lock
+                if self.connection:
+                    self.connection.close()
+                    self.connection = None
+            logger.error(f"Error storing message: {e}")
+            return False
         except Exception as e:
             logger.error(f"Error storing message: {e}")
             return False
@@ -104,7 +133,7 @@ class MessageStore:
                              next_retry: Optional[float] = None) -> bool:
         """Update the status of a message"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
             update_fields = ["status = ?"]
@@ -126,9 +155,17 @@ class MessageStore:
             )
             
             conn.commit()
-            conn.close()
             logger.debug(f"Updated message {message_id} status to {status}")
             return True
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                logger.warning(f"Database lock detected while updating message: {e}")
+                # Close and reopen connection on lock
+                if self.connection:
+                    self.connection.close()
+                    self.connection = None
+            logger.error(f"Error updating message status: {e}")
+            return False
         except Exception as e:
             logger.error(f"Error updating message status: {e}")
             return False

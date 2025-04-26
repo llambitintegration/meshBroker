@@ -16,6 +16,7 @@ from .auth_dependencies import (
     JWTBearer,
     OptionalJWTBearer,
     AdminRequired,
-    APIKeyAuth
+    APIKeyAuth,
+    api_key_required
 )
 from .rate_limiter import RateLimiter, get_limiter 

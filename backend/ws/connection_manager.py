@@ -88,10 +88,21 @@ class ConnectionManager:
         now = time.time()
         to_remove = []
         
+        # Log the current state
+        logger.debug(f"Checking {len(self.active_connections)} active connections")
+        
         for connection_id, (websocket, conn_info) in self.active_connections.items():
+            # More lenient timeout - use 3x the ping timeout
+            timeout_threshold = self.ping_timeout * 3
+            time_since_activity = now - conn_info.last_activity
+            
+            # Log activity for debugging
+            if time_since_activity > (self.ping_timeout):
+                logger.debug(f"Connection {connection_id} inactive for {time_since_activity:.1f}s (timeout: {timeout_threshold:.1f}s)")
+            
             # Check if connection is stale
-            if now - conn_info.last_activity > self.ping_timeout * 2:
-                logger.warning(f"Connection {connection_id} timed out, removing")
+            if time_since_activity > timeout_threshold:
+                logger.warning(f"Connection {connection_id} timed out after {time_since_activity:.1f}s, removing")
                 to_remove.append(connection_id)
                 continue
             
@@ -311,12 +322,12 @@ class ConnectionManager:
             
             return False
     
-    async def broadcast(self, message: WSMessage, exclude: Optional[Set[str]] = None) -> int:
+    async def broadcast(self, message: Any, exclude: Optional[Set[str]] = None) -> int:
         """
         Broadcast a message to all connections
         
         Args:
-            message: Message to broadcast
+            message: Message to broadcast (WSMessage object or string)
             exclude: Set of connection IDs to exclude from broadcast
             
         Returns:
@@ -329,12 +340,25 @@ class ConnectionManager:
         exclude_set = exclude or set()
         sent_count = 0
         
+        # Determine if message is already a string or needs conversion
+        if isinstance(message, str):
+            message_text = message
+        elif hasattr(message, 'to_json'):
+            message_text = message.to_json()
+        else:
+            # Try to convert to string
+            try:
+                message_text = str(message)
+            except Exception as e:
+                logger.error(f"Could not convert message to string: {e}")
+                return 0
+        
         for connection_id, (websocket, conn_info) in list(self.active_connections.items()):
             if connection_id in exclude_set:
                 continue
             
             try:
-                await websocket.send_text(message.to_json())
+                await websocket.send_text(message_text)
                 conn_info.update_activity()
                 sent_count += 1
                 self.stats["messages_sent"] += 1
@@ -344,22 +368,23 @@ class ConnectionManager:
                 
                 # Check if connection needs to be closed
                 try:
-                    await websocket.send_text(WSMessage(
+                    ping_message = WSMessage(
                         type=WSMessageType.PING,
                         payload={"time": time.time()}
-                    ).to_json())
+                    ).to_json()
+                    await websocket.send_text(ping_message)
                 except Exception:
                     logger.warning(f"Connection {connection_id} appears to be closed, disconnecting")
                     await self.disconnect(connection_id)
         
         return sent_count
     
-    async def broadcast_authenticated(self, message: WSMessage, exclude: Optional[Set[str]] = None) -> int:
+    async def broadcast_authenticated(self, message: Any, exclude: Optional[Set[str]] = None) -> int:
         """
         Broadcast a message to authenticated connections only
         
         Args:
-            message: Message to broadcast
+            message: Message to broadcast (WSMessage object or string)
             exclude: Set of connection IDs to exclude from broadcast
             
         Returns:
@@ -372,6 +397,19 @@ class ConnectionManager:
         exclude_set = exclude or set()
         sent_count = 0
         
+        # Determine if message is already a string or needs conversion
+        if isinstance(message, str):
+            message_text = message
+        elif hasattr(message, 'to_json'):
+            message_text = message.to_json()
+        else:
+            # Try to convert to string
+            try:
+                message_text = str(message)
+            except Exception as e:
+                logger.error(f"Could not convert message to string: {e}")
+                return 0
+        
         for connection_id in list(self.authenticated_connections):
             if connection_id in exclude_set:
                 continue
@@ -383,7 +421,7 @@ class ConnectionManager:
             websocket, conn_info = self.active_connections[connection_id]
             
             try:
-                await websocket.send_text(message.to_json())
+                await websocket.send_text(message_text)
                 conn_info.update_activity()
                 sent_count += 1
                 self.stats["messages_sent"] += 1
@@ -393,22 +431,23 @@ class ConnectionManager:
                 
                 # Check if connection needs to be closed
                 try:
-                    await websocket.send_text(WSMessage(
+                    ping_message = WSMessage(
                         type=WSMessageType.PING,
                         payload={"time": time.time()}
-                    ).to_json())
+                    ).to_json()
+                    await websocket.send_text(ping_message)
                 except Exception:
                     logger.warning(f"Connection {connection_id} appears to be closed, disconnecting")
                     await self.disconnect(connection_id)
         
         return sent_count
     
-    async def broadcast_to_users(self, message: WSMessage, user_ids: List[str]) -> int:
+    async def broadcast_to_users(self, message: Any, user_ids: List[str]) -> int:
         """
         Broadcast a message to specific users
         
         Args:
-            message: Message to broadcast
+            message: Message to broadcast (WSMessage object or string)
             user_ids: List of user IDs to broadcast to
             
         Returns:
@@ -422,12 +461,25 @@ class ConnectionManager:
         user_id_set = set(user_ids)
         sent_count = 0
         
+        # Determine if message is already a string or needs conversion
+        if isinstance(message, str):
+            message_text = message
+        elif hasattr(message, 'to_json'):
+            message_text = message.to_json()
+        else:
+            # Try to convert to string
+            try:
+                message_text = str(message)
+            except Exception as e:
+                logger.error(f"Could not convert message to string: {e}")
+                return 0
+        
         for connection_id, (websocket, conn_info) in list(self.active_connections.items()):
             if not conn_info.is_authenticated or conn_info.user_id not in user_id_set:
                 continue
             
             try:
-                await websocket.send_text(message.to_json())
+                await websocket.send_text(message_text)
                 conn_info.update_activity()
                 sent_count += 1
                 self.stats["messages_sent"] += 1
@@ -437,22 +489,23 @@ class ConnectionManager:
                 
                 # Check if connection needs to be closed
                 try:
-                    await websocket.send_text(WSMessage(
+                    ping_message = WSMessage(
                         type=WSMessageType.PING,
                         payload={"time": time.time()}
-                    ).to_json())
+                    ).to_json()
+                    await websocket.send_text(ping_message)
                 except Exception:
                     logger.warning(f"Connection {connection_id} appears to be closed, disconnecting")
                     await self.disconnect(connection_id)
         
         return sent_count
     
-    async def broadcast_by_client_id(self, message: WSMessage, client_ids: List[str]) -> int:
+    async def broadcast_by_client_id(self, message: Any, client_ids: List[str]) -> int:
         """
         Broadcast a message to specific client IDs
         
         Args:
-            message: Message to broadcast
+            message: Message to broadcast (WSMessage object or string)
             client_ids: List of client IDs to broadcast to
             
         Returns:
@@ -466,12 +519,25 @@ class ConnectionManager:
         client_id_set = set(client_ids)
         sent_count = 0
         
+        # Determine if message is already a string or needs conversion
+        if isinstance(message, str):
+            message_text = message
+        elif hasattr(message, 'to_json'):
+            message_text = message.to_json()
+        else:
+            # Try to convert to string
+            try:
+                message_text = str(message)
+            except Exception as e:
+                logger.error(f"Could not convert message to string: {e}")
+                return 0
+        
         for connection_id, (websocket, conn_info) in list(self.active_connections.items()):
             if not conn_info.client_id or conn_info.client_id not in client_id_set:
                 continue
             
             try:
-                await websocket.send_text(message.to_json())
+                await websocket.send_text(message_text)
                 conn_info.update_activity()
                 sent_count += 1
                 self.stats["messages_sent"] += 1
@@ -481,10 +547,11 @@ class ConnectionManager:
                 
                 # Check if connection needs to be closed
                 try:
-                    await websocket.send_text(WSMessage(
+                    ping_message = WSMessage(
                         type=WSMessageType.PING,
                         payload={"time": time.time()}
-                    ).to_json())
+                    ).to_json()
+                    await websocket.send_text(ping_message)
                 except Exception:
                     logger.warning(f"Connection {connection_id} appears to be closed, disconnecting")
                     await self.disconnect(connection_id)
@@ -513,6 +580,10 @@ class ConnectionManager:
         try:
             message = WSMessage.from_json(message_text)
             self.stats["total_messages"] += 1
+            
+            # Log message receipt for debugging
+            logger.debug(f"Received message type '{message.type}' from connection {connection_id}")
+            
         except Exception as e:
             logger.error(f"Error parsing message from connection {connection_id}: {e}")
             error_message = WSMessage(
@@ -524,7 +595,8 @@ class ConnectionManager:
         
         # Handle specific message types
         if message.type == WSMessageType.PING:
-            # Respond to ping
+            # Respond to ping immediately
+            logger.debug(f"Responding to ping from connection {connection_id}")
             pong_message = WSMessage(
                 type=WSMessageType.PONG,
                 payload={
@@ -536,7 +608,9 @@ class ConnectionManager:
             return message
         
         elif message.type == WSMessageType.PONG:
-            # Just update activity timestamp
+            # Just update activity timestamp and log for debugging
+            logger.debug(f"Received pong from connection {connection_id}")
+            conn_info.update_activity()  # Explicitly update activity again for pongs
             return message
         
         # Call message event handler if provided

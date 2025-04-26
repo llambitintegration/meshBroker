@@ -330,6 +330,12 @@ class MQTTHandler:
     def set_message_callback(self, callback: Callable):
         """Set callback for received messages"""
         self.message_callback = callback
+        logger.debug("Message callback set")
+        
+    def set_connection_callback(self, callback: Callable):
+        """Set callback for connection status changes"""
+        self.connection_callback = callback
+        logger.debug("Connection callback set")
 
     def is_connected(self) -> bool:
         """Check if connected to MQTT broker"""
@@ -431,42 +437,45 @@ class MQTTHandler:
         )
     
     def _on_connect(self, client, userdata, flags, rc):
-        """Callback for when client connects to broker"""
+        """Callback when connected to MQTT broker"""
         if rc == 0:
-            logger.info("Connected to MQTT broker")
             self.connected = True
             self.reconnect_attempt_count = 0
-            self.reconnect_interval = 5  # Reset backoff
+            logger.info("Connected to MQTT broker")
             
             # Resubscribe to topics
             for topic, qos in self.subscribed_topics.items():
-                logger.info(f"Resubscribing to topic {topic}")
-                client.subscribe(topic, qos=qos)
-                
-            # Process any stored offline messages
+                logger.info(f"Resubscribing to topic: {topic}")
+                self.client.subscribe(topic, qos)
+            
+            # Process any stored messages
             if self.persistence_enabled and self.message_store:
                 self.process_offline_messages()
+                
+            # Notify about connection status change if callback is set
+            if hasattr(self, 'connection_callback') and self.connection_callback:
+                self._run_connection_callback(True)
         else:
-            logger.error(f"Failed to connect to MQTT broker: {mqtt.connack_string(rc)}")
             self.connected = False
+            logger.error(f"Failed to connect to MQTT broker with result code {rc}")
             self._handle_connection_failure()
+            
+            # Notify about connection status change if callback is set
+            if hasattr(self, 'connection_callback') and self.connection_callback:
+                self._run_connection_callback(False)
     
     def _on_disconnect(self, client, userdata, rc):
-        """Callback for when client disconnects from broker"""
+        """Callback when disconnected from MQTT broker"""
+        self.connected = False
         if rc == 0:
             logger.info("Disconnected from MQTT broker")
         else:
-            logger.warning(f"Unexpected disconnect from MQTT broker: {rc}")
-            
-        self.connected = False
+            logger.warning(f"Unexpected disconnection from MQTT broker with result code {rc}")
+            self._handle_connection_failure()
         
-        # Try to reconnect if it was an unexpected disconnect
-        if rc != 0:
-            now = time.time()
-            # Only attempt reconnect if sufficient time has passed since last attempt
-            if now - self.last_reconnect_attempt > self.reconnect_interval:
-                logger.info("Attempting to reconnect after unexpected disconnect")
-                self.connect()
+        # Notify about connection status change if callback is set
+        if hasattr(self, 'connection_callback') and self.connection_callback:
+            self._run_connection_callback(False)
     
     def _on_message(self, client, userdata, msg):
         """Callback for when a message is received from the broker"""
@@ -579,3 +588,25 @@ class MQTTHandler:
             logger.warning("Flow control activated - throttling message publishing")
         else:
             logger.info("Flow control deactivated - normal message publishing resumed")
+
+    def _run_connection_callback(self, connected: bool):
+        """Run the connection callback in the main event loop if available"""
+        if self._main_event_loop:
+            import asyncio
+            
+            async def _run_callback():
+                try:
+                    if asyncio.iscoroutinefunction(self.connection_callback):
+                        await self.connection_callback(connected)
+                    else:
+                        self.connection_callback(connected)
+                except Exception as e:
+                    logger.error(f"Error in connection callback: {e}")
+            
+            asyncio.run_coroutine_threadsafe(_run_callback(), self._main_event_loop)
+        else:
+            # If no event loop is available, try to call directly
+            try:
+                self.connection_callback(connected)
+            except Exception as e:
+                logger.error(f"Error in connection callback (direct call): {e}")

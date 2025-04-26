@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from typing import Dict, List, Optional, Any
-import logging
-import time
-from ..auth import JWTBearer, APIKeyAuth
-from ..mqtt.mqtt_handler import MQTTHandler  # Import MQTT handler
+from fastapi import APIRouter, Depends
+from typing import Dict, Any
+import os
+import sys
+import platform
+
+# Add a broker status check
+from .. import meshtastic_integration
 
 router = APIRouter(
     prefix="/status",
@@ -11,47 +13,75 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-logger = logging.getLogger(__name__)
-
-# Variable to store MQTT handler reference
+# MQTT handler reference
 mqtt_handler = None
 
-def set_mqtt_handler(handler: MQTTHandler):
-    """Set the MQTT handler reference"""
+def set_mqtt_handler(handler):
+    """Set the MQTT handler reference for status checks"""
     global mqtt_handler
     mqtt_handler = handler
-    logger.info("MQTT handler reference set in status router")
 
-@router.get("/", response_model=Dict[str, Any])
-async def get_api_status():
-    """
-    Get the current status of the API
+@router.get("/")
+def get_status() -> Dict[str, Any]:
+    """Get the current status of the API and MQTT broker"""
+    # Determine if MQTT is connected based on the meshtastic integration
+    mqtt_status = "disconnected"
+    mqtt_details = {}
     
-    Returns a status object with connection information and timestamps.
-    """
-    mqtt_connected = False
-    if mqtt_handler:
-        mqtt_connected = mqtt_handler.is_connected()
-    
-    # Build the status response
-    status = {
-        "status": "connected",
-        "timestamp": int(time.time()),
-        "version": "1.0.0",
-        "services": {
-            "mqtt": {
-                "status": "connected" if mqtt_connected else "disconnected"
+    try:
+        # Check if meshtastic integration is initialized
+        if meshtastic_integration.message_router is not None:
+            mqtt_status = "connected"
+            mqtt_details = {
+                "connection_mode": meshtastic_integration.CONNECTION_MODE,
+                "node_count": meshtastic_integration.get_node_count()
             }
-        }
+    except Exception as e:
+        mqtt_status = "error"
+        mqtt_details = {"error": str(e)}
+    
+    # Get system information
+    sys_info = {
+        "python": sys.version.split()[0],
+        "os": platform.system(),
+        "platform": platform.platform(),
+        "hostname": platform.node()
     }
     
-    return status
-
-@router.get("/health", response_model=Dict[str, str])
-async def health_check():
-    """
-    Simple health check endpoint for monitoring systems
+    # Get environment variables (filter sensitive ones)
+    env_info = {
+        "MESHTASTIC_CONNECTION_MODE": os.environ.get("MESHTASTIC_CONNECTION_MODE", "hybrid"),
+        "NODE_EXPIRATION_SECONDS": os.environ.get("NODE_EXPIRATION_SECONDS", "3600")
+    }
     
-    Returns a simple status message.
-    """
-    return {"status": "healthy"} 
+    return {
+        "api_status": "ok",
+        "mqtt_status": mqtt_status,
+        "mqtt_details": mqtt_details,
+        "system_info": sys_info,
+        "environment": env_info,
+        "message": "API is running normally"
+    }
+
+@router.get("/broker")
+def get_broker_status() -> Dict[str, Any]:
+    """Get the MQTT broker connection status"""
+    mqtt_status = "disconnected"
+    mqtt_details = {}
+    
+    try:
+        # Check if meshtastic integration is initialized
+        if meshtastic_integration.message_router is not None:
+            mqtt_status = "connected"
+            mqtt_details = {
+                "connection_mode": meshtastic_integration.CONNECTION_MODE,
+                "node_count": meshtastic_integration.get_node_count()
+            }
+    except Exception as e:
+        mqtt_status = "error"
+        mqtt_details = {"error": str(e)}
+    
+    return {
+        "status": mqtt_status,
+        "details": mqtt_details
+    } 

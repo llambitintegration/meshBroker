@@ -16,7 +16,7 @@ from backend.messaging.message_queue import MessageQueue, FlowController
 
 # Authentication and new components
 from backend.models.user import User, Role
-from backend.auth import JWTBearer, AdminRequired, APIKeyAuth
+from backend.auth import JWTBearer, AdminRequired, APIKeyAuth, api_key_required
 from backend.auth.routes import router as auth_router
 from backend.mqtt.settings_routes import router as mqtt_settings_router
 from backend.mqtt.settings_routes import set_mqtt_handler
@@ -85,15 +85,26 @@ set_status_mqtt_handler(mqtt_handler)
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
+        self.ping_interval = settings.WS_PING_INTERVAL
+        self.ping_task = None
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
         logger.info(f"New WebSocket connection established. Total active connections: {len(self.active_connections)}")
+        
+        # Start ping task if not already running
+        if self.ping_task is None or self.ping_task.done():
+            self.ping_task = asyncio.create_task(self._ping_connections())
 
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
-        logger.info(f"WebSocket connection closed. Remaining active connections: {len(self.active_connections)}")
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+            logger.info(f"WebSocket connection closed. Remaining active connections: {len(self.active_connections)}")
+        
+        # Cancel ping task if no more connections
+        if not self.active_connections and self.ping_task is not None:
+            self.ping_task.cancel()
 
     async def broadcast(self, message: str):
         if not self.active_connections:
@@ -101,11 +112,41 @@ class ConnectionManager:
             return
             
         logger.debug(f"Broadcasting message to {len(self.active_connections)} connections")
+        
+        # Use a copy of the connections list to avoid modification during iteration
+        connections_to_remove = []
+        
         for connection in self.active_connections:
             try:
                 await connection.send_text(message)
+            except WebSocketDisconnect:
+                logger.debug("Connection already closed during broadcast")
+                connections_to_remove.append(connection)
             except Exception as e:
                 logger.error(f"Error broadcasting message: {e}")
+                connections_to_remove.append(connection)
+        
+        # Clean up any disconnected connections
+        for connection in connections_to_remove:
+            if connection in self.active_connections:
+                self.disconnect(connection)
+    
+    async def _ping_connections(self):
+        """Send periodic pings to keep connections alive"""
+        try:
+            while self.active_connections:
+                await asyncio.sleep(self.ping_interval)
+                
+                if not self.active_connections:
+                    break
+                
+                ping_message = json.dumps({"type": "ping", "timestamp": int(time.time())})
+                await self.broadcast(ping_message)
+                
+        except asyncio.CancelledError:
+            logger.debug("Ping task cancelled")
+        except Exception as e:
+            logger.error(f"Error in ping task: {e}")
 
 
 # Legacy connection manager for backward compatibility
@@ -312,10 +353,14 @@ async def get_broker_status(request: Request):
     """Get the current status of the MQTT broker connection"""
     global mqtt_status
     
-    # Add timestamp to the status info
+    # Add timestamp and API status to the status info
     status_info = {
         **mqtt_status,
-        "timestamp": int(time.time())
+        "timestamp": int(time.time()),
+        "api": {
+            "status": "connected",
+            "timestamp": int(time.time())
+        }
     }
     
     return status_info
@@ -541,7 +586,7 @@ class MeshMessage(BaseModel):
 async def send_node_message(node_id: str, message: MeshMessage, request: Request):
     """Send a message to a specific node"""
     try:
-        result = meshtastic_integration.send_message(node_id, message.text, message.source_id)
+        result = meshtastic_integration.send_message_to_node(mqtt_handler, node_id, message.text, message.source_id)
         if not result:
             raise HTTPException(status_code=500, detail="Failed to send message")
         
@@ -556,7 +601,7 @@ async def send_node_message(node_id: str, message: MeshMessage, request: Request
 async def broadcast_node_message(message: MeshMessage, request: Request):
     """Broadcast a message to all nodes"""
     try:
-        result = meshtastic_integration.broadcast_message(message.text, message.source_id)
+        result = meshtastic_integration.broadcast_message(mqtt_handler, message.text, message.source_id)
         if not result:
             raise HTTPException(status_code=500, detail="Failed to broadcast message")
         
@@ -567,16 +612,198 @@ async def broadcast_node_message(message: MeshMessage, request: Request):
 
 
 @app.get("/meshtastic/stats")
-@limiter.limit("30/minute")
+@api_key_required
 async def get_meshtastic_stats(request: Request):
     """Get Meshtastic integration statistics"""
     try:
-        stats = meshtastic_integration.get_stats()
+        stats = meshtastic_integration.get_node_count()
         return stats
     except Exception as e:
         logger.error(f"Error retrieving Meshtastic stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error retrieving Meshtastic statistics")
 
+
+# New endpoints for direct device management
+
+@app.get("/meshtastic/devices")
+@api_key_required
+async def get_meshtastic_devices(request: Request):
+    """Get all connected Meshtastic devices"""
+    try:
+        devices = meshtastic_integration.get_connected_devices()
+        return devices
+    except Exception as e:
+        logger.error(f"Error retrieving Meshtastic devices: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving Meshtastic devices")
+
+@app.get("/meshtastic/discover")
+@api_key_required
+async def discover_meshtastic_devices(
+    request: Request,
+    connection_type: str = "all"
+):
+    """Discover available Meshtastic devices"""
+    try:
+        if connection_type not in ["serial", "ble", "all"]:
+            raise HTTPException(status_code=400, detail="Invalid connection type. Must be 'serial', 'ble', or 'all'")
+        
+        devices = await meshtastic_integration.discover_devices(connection_type)
+        return devices
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error discovering Meshtastic devices: {e}")
+        raise HTTPException(status_code=500, detail="Error discovering Meshtastic devices")
+
+class DeviceConnectionRequest(BaseModel):
+    connection_type: str
+    connection_params: Dict[str, Any]
+    device_id: Optional[str] = None
+
+@app.post("/meshtastic/devices")
+@api_key_required
+async def connect_meshtastic_device(
+    request: Request,
+    connection_request: DeviceConnectionRequest
+):
+    """Connect to a Meshtastic device"""
+    try:
+        if connection_request.connection_type not in ["serial", "tcp", "ble"]:
+            raise HTTPException(status_code=400, detail="Invalid connection type. Must be 'serial', 'tcp', or 'ble'")
+        
+        device_id = await meshtastic_integration.connect_device(
+            connection_request.connection_type,
+            connection_request.connection_params,
+            connection_request.device_id
+        )
+        
+        if not device_id:
+            raise HTTPException(status_code=500, detail="Failed to connect to device")
+        
+        return {"device_id": device_id, "status": "connected"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error connecting to Meshtastic device: {e}")
+        raise HTTPException(status_code=500, detail="Error connecting to Meshtastic device")
+
+@app.delete("/meshtastic/devices/{device_id}")
+@api_key_required
+async def disconnect_meshtastic_device(
+    request: Request,
+    device_id: str
+):
+    """Disconnect from a Meshtastic device"""
+    try:
+        success = await meshtastic_integration.disconnect_device(device_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail=f"Device {device_id} not found or already disconnected")
+        
+        return {"device_id": device_id, "status": "disconnected"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error disconnecting from Meshtastic device: {e}")
+        raise HTTPException(status_code=500, detail="Error disconnecting from Meshtastic device")
+
+@app.get("/meshtastic/devices/{device_id}/config")
+@api_key_required
+async def get_meshtastic_device_config(
+    request: Request,
+    device_id: Optional[str] = None
+):
+    """Get device configuration"""
+    try:
+        config = meshtastic_integration.get_device_config(device_id)
+        
+        if not config:
+            raise HTTPException(status_code=404, detail=f"Device {device_id} not found or has no configuration")
+        
+        return config
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving Meshtastic device configuration: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving Meshtastic device configuration")
+
+class ConfigUpdateRequest(BaseModel):
+    key: str
+    value: Any
+
+@app.post("/meshtastic/devices/{device_id}/config")
+@api_key_required
+async def set_meshtastic_device_config(
+    request: Request,
+    config_update: ConfigUpdateRequest,
+    device_id: Optional[str] = None
+):
+    """Set device configuration"""
+    try:
+        success = meshtastic_integration.set_device_config(
+            config_update.key,
+            config_update.value,
+            device_id
+        )
+        
+        if not success:
+            raise HTTPException(status_code=404, detail=f"Device {device_id} not found or configuration update failed")
+        
+        return {"status": "success", "message": f"Configuration {config_update.key} updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating Meshtastic device configuration: {e}")
+        raise HTTPException(status_code=500, detail="Error updating Meshtastic device configuration")
+
+@app.get("/meshtastic/devices/{device_id}/channels")
+@api_key_required
+async def get_meshtastic_device_channels(
+    request: Request,
+    device_id: Optional[str] = None
+):
+    """Get device channel settings"""
+    try:
+        channels = meshtastic_integration.get_device_channels(device_id)
+        
+        if not channels:
+            raise HTTPException(status_code=404, detail=f"Device {device_id} not found or has no channels")
+        
+        return channels
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving Meshtastic device channels: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving Meshtastic device channels")
+
+class ChannelUpdateRequest(BaseModel):
+    settings: Dict[str, Any]
+    channel_index: int = 0
+
+@app.post("/meshtastic/devices/{device_id}/channels")
+@api_key_required
+async def set_meshtastic_device_channel(
+    request: Request,
+    channel_update: ChannelUpdateRequest,
+    device_id: Optional[str] = None
+):
+    """Set device channel settings"""
+    try:
+        success = meshtastic_integration.set_device_channel(
+            channel_update.settings,
+            channel_update.channel_index,
+            device_id
+        )
+        
+        if not success:
+            raise HTTPException(status_code=404, detail=f"Device {device_id} not found or channel update failed")
+        
+        return {"status": "success", "message": f"Channel {channel_update.channel_index} updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating Meshtastic device channel: {e}")
+        raise HTTPException(status_code=500, detail="Error updating Meshtastic device channel")
 
 # Legacy WebSocket endpoint (kept for backward compatibility)
 @app.websocket("/ws")
@@ -595,7 +822,8 @@ async def websocket_endpoint(websocket: WebSocket):
             "mqtt": {
                 "status": "connected" if mqtt_handler.is_connected() else "disconnected",
                 "timestamp": int(time.time())
-            }
+            },
+            "broker": mqtt_handler.get_broker_status() if mqtt_handler else {"status": "UNKNOWN"}
         }
     }
     
@@ -603,13 +831,38 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.send_text(json.dumps(initial_status))
         while True:
             # Keep the connection alive - wait for messages
-            data = await websocket.receive_text()
+            data = await asyncio.wait_for(websocket.receive_text(), timeout=settings.WS_PING_TIMEOUT)
             message = json.loads(data)
             
             # Handle different message types
-            if message["type"] == "ping":
-                await websocket.send_text(json.dumps({"type": "pong"}))
+            if message.get("type") == "ping":
+                await websocket.send_text(json.dumps({"type": "pong", "timestamp": int(time.time())}))
+            elif message.get("type") == "request_status":
+                # Send updated status if requested
+                status_update = {
+                    "type": "status",
+                    "data": {
+                        "api": {
+                            "status": "connected",
+                            "timestamp": int(time.time())
+                        },
+                        "mqtt": {
+                            "status": "connected" if mqtt_handler.is_connected() else "disconnected",
+                            "timestamp": int(time.time())
+                        },
+                        "broker": mqtt_handler.get_broker_status() if mqtt_handler else {"status": "UNKNOWN"}
+                    }
+                }
+                await websocket.send_text(json.dumps(status_update))
     except WebSocketDisconnect:
+        logger.info("WebSocket client disconnected normally")
+    except asyncio.TimeoutError:
+        logger.info("WebSocket connection timed out")
+    except json.JSONDecodeError:
+        logger.warning("Received invalid JSON data on WebSocket")
+    except Exception as e:
+        logger.error(f"Error in WebSocket connection: {e}")
+    finally:
         manager.disconnect(websocket)
 
 
@@ -631,8 +884,12 @@ async def on_mqtt_connection_change(connected: bool):
         "data": mqtt_status
     }
     
+    # Serialize the JSON before broadcasting
+    json_message = json.dumps(status_message)
+    
     try:
-        await enhanced_manager.broadcast(json.dumps(status_message))
+        # Broadcast to enhanced manager connections
+        await enhanced_manager.broadcast(json_message)
     except Exception as e:
         logger.error(f"Error broadcasting MQTT status: {e}")
 

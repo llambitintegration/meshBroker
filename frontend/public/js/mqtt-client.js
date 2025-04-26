@@ -24,6 +24,9 @@ class MQTTClient {
     // Auth token for WebSocket authentication
     this.authToken = localStorage.getItem('auth_token') || null;
     
+    // API key for protected endpoints
+    this.apiKey = localStorage.getItem('api_key') || null;
+    
     // WebSocket connection
     this.ws = null;
     
@@ -51,6 +54,54 @@ class MQTTClient {
     
     // WebSocket channel ID (for enhanced WebSocket support)
     this.channelId = null;
+  }
+
+  /**
+   * Set the API key for protected endpoints
+   * @param {string} apiKey - The API key to use
+   */
+  setApiKey(apiKey) {
+    this.apiKey = apiKey;
+    if (apiKey) {
+      localStorage.setItem('api_key', apiKey);
+      console.log('API key set successfully');
+    } else {
+      localStorage.removeItem('api_key');
+      console.log('API key removed');
+    }
+  }
+
+  /**
+   * Get the current API key
+   * @returns {string|null} - The current API key or null if not set
+   */
+  getApiKey() {
+    return this.apiKey;
+  }
+
+  /**
+   * Make an authenticated fetch request
+   * @param {string} url - The URL to fetch
+   * @param {object} options - Fetch options
+   * @returns {Promise<Response>} - The fetch response
+   */
+  async authenticatedFetch(url, options = {}) {
+    // Initialize headers if not provided
+    if (!options.headers) {
+      options.headers = {};
+    }
+    
+    // Add API key header if available
+    if (this.apiKey) {
+      options.headers['X-API-Key'] = this.apiKey;
+    }
+    
+    // Add auth token if available and X-API-Key is not
+    if (this.authToken && !this.apiKey) {
+      options.headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+    
+    return fetch(url, options);
   }
 
   /**
@@ -236,6 +287,19 @@ class MQTTClient {
         try {
           const message = JSON.parse(event.data);
           
+          // Handle ping messages immediately
+          if (message.type === 'ping') {
+            console.log('Received ping from server, responding with pong');
+            // Respond with pong immediately to maintain connection
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+              this.ws.send(JSON.stringify({ 
+                type: 'pong', 
+                timestamp: message.timestamp || Date.now() 
+              }));
+            }
+            return;
+          }
+          
           // Handle channel assignment response
           if (message.type === 'channel_assignment') {
             this.channelId = message.channel_id;
@@ -278,17 +342,37 @@ class MQTTClient {
       clearInterval(this.pingTimer);
     }
     
-    // Send a ping message every 30 seconds
+    // Send a ping message every 15 seconds (more frequent than the default 30s timeout)
     this.pingTimer = setInterval(() => {
       if (this.connected && this.ws && this.ws.readyState === WebSocket.OPEN) {
         console.log('Sending ping to server...');
-        this.ws.send(JSON.stringify({ type: 'ping' }));
+        try {
+          this.ws.send(JSON.stringify({ 
+            type: 'ping', 
+            timestamp: Date.now(),
+            client_id: "browser-client" // Add client identifier
+          }));
+        } catch (error) {
+          console.error('Error sending ping:', error);
+          
+          // If sending fails, the connection might be broken
+          if (this.ws.readyState !== WebSocket.OPEN) {
+            console.warn('WebSocket connection appears to be closed, attempting to reconnect...');
+            clearInterval(this.pingTimer);
+            this.pingTimer = null;
+            this.connected = false;
+            this.updateMqttStatus(false);
+            
+            // Attempt to reconnect
+            setTimeout(() => this.connectWebSocket(), 1000);
+          }
+        }
       } else {
         // If we're not connected, stop pinging
         clearInterval(this.pingTimer);
         this.pingTimer = null;
       }
-    }, 30000); // 30 seconds
+    }, 15000); // 15 seconds - more frequent than server timeout
   }
 
   /**
@@ -370,93 +454,75 @@ class MQTTClient {
   }
 
   /**
-   * Check the status of the MQTT broker
-   * @returns {Promise<Object>} Status information
+   * Check API and MQTT status
+   * @returns {Promise<object>} - Status object
    */
   async checkStatus() {
     try {
-      console.log('Checking broker status...');
+      console.log('Checking API status...');
       
-      // Common headers for all requests
-      const headers = {
-        'Content-Type': 'application/json',
-        'Authorization': this.authToken ? `Bearer ${this.authToken}` : '',
-        // Add headers that help with CORS issues
-        'Accept': 'application/json',
-        'X-Requested-With': 'XMLHttpRequest'
-      };
+      // First, check if the API is reachable at all
+      let statusUrl = `${this.apiBaseUrl}/status`;
       
-      // Use the broker_status endpoint directly since /status is not working
       try {
-        console.log('Trying /broker_status endpoint...');
-        const response = await fetch(`${this.apiBaseUrl}/broker_status`, {
+        // Use a shorter timeout for the initial API status check
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        
+        const response = await fetch(statusUrl, {
           method: 'GET',
-          mode: 'cors',
-          credentials: 'same-origin',
-          headers,
-          cache: 'no-cache'
+          signal: controller.signal
         });
         
+        // Clear the timeout
+        clearTimeout(timeoutId);
+        
         if (!response.ok) {
-          // Additional details about the failed request
-          console.error('Failed to fetch broker status:', {
-            status: response.status,
-            statusText: response.statusText,
-            url: `${this.apiBaseUrl}/broker_status`
-          });
-          
+          console.warn(`API status check failed with status: ${response.status}`);
           this.updateApiStatus(false);
-          
-          // Try to get more information from the response if possible
-          try {
-            const errorData = await response.json();
-            console.error('Error details from server:', errorData);
-            return { status: 'error', details: errorData };
-          } catch {
-            // If we can't parse the response, just return the basic info
-            return { status: 'error', statusCode: response.status };
-          }
+          return { status: 'error', message: 'API server is not responding properly' };
         }
         
         const data = await response.json();
-        console.log('Broker status:', data);
+        console.log('API status response:', data);
         
-        // Update MQTT status based on connection status
-        const connected = data.connection === 'connected' || data.status === 'connected';
-        this.updateMqttStatus(connected);
+        // Update status indicators
+        const apiConnected = data.api_status === 'ok';
+        const mqttConnected = data.mqtt_status === 'connected';
         
-        // Also make sure API status shows as connected since we got a valid response
-        this.updateApiStatus(true);
+        this.updateApiStatus(apiConnected);
+        this.updateMqttStatus(mqttConnected);
         
-        // Return a format compatible with what the checkApiStatus function expects
         return {
-          status: connected ? 'connected' : 'disconnected',
-          services: {
-            mqtt: {
-              status: connected ? 'connected' : 'disconnected'
-            }
-          }
+          status: mqttConnected ? 'connected' : 'disconnected',
+          api_status: apiConnected ? 'ok' : 'error',
+          mqtt_status: data.mqtt_status,
+          message: data.message || 'API is responding correctly'
         };
-      } catch (error) {
-        console.error('Error with /broker_status endpoint:', error);
         
-        // Try to identify network or CORS issues
-        if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
-          console.error('This appears to be a network or CORS issue.');
-          this.showConnectionAlert('API connection failed. This may be due to CORS restrictions or network issues.');
+      } catch (error) {
+        // Handle network errors or timeouts
+        console.error('Error checking API status:', error);
+        
+        // Check if this was an abort error (timeout)
+        if (error.name === 'AbortError') {
+          console.warn('API status check timed out after 5 seconds');
+          this.updateApiStatus(false);
+          return { status: 'error', message: 'API server request timed out' };
         }
         
-        throw error; // Rethrow to be caught by the outer try/catch
+        // Other network error
+        this.updateApiStatus(false);
+        return { 
+          status: 'error', 
+          message: 'Cannot connect to API server. Please check that the server is running.'
+        };
       }
     } catch (error) {
-      console.error('Error checking broker status:', error);
+      console.error('Unexpected error in checkStatus:', error);
       this.updateApiStatus(false);
       this.updateMqttStatus(false);
-      
-      // Add UI alert for connection issues
-      this.showConnectionAlert();
-      
-      return { status: 'error', message: error.message };
+      return { status: 'error', message: 'Unexpected error checking status' };
     }
   }
 
@@ -611,25 +677,26 @@ class MQTTClient {
    */
   async sendMeshtasticMessage(text, destination) {
     try {
-      // Build topic based on destination
-      const topic = destination === 'broadcast' 
-        ? 'msh/broadcast/json/text' 
-        : `msh/${destination}/json/text`;
+      const endpoint = destination 
+        ? `${this.apiBaseUrl}/meshtastic/nodes/${destination}/message` 
+        : `${this.apiBaseUrl}/meshtastic/broadcast`;
       
-      // Build payload
-      const payload = {
-        text: {
-          text: text,
-          from: 'mqtt-bridge-ui',
-          to: destination === 'broadcast' ? '^all' : destination,
-          time: Math.floor(Date.now() / 1000)
-        }
-      };
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ text })
+      });
       
-      return await this.publishMessage(topic, payload);
+      if (!response.ok) {
+        throw new Error(`Error: ${response.status}`);
+      }
+      
+      return await response.json();
     } catch (error) {
       console.error('Error sending Meshtastic message:', error);
-      return { status: 'error', message: error.message };
+      return { success: false, error: error.message };
     }
   }
 
@@ -807,6 +874,330 @@ class MQTTClient {
           this.connectWebSocket();
         });
       }
+    }
+  }
+
+  /**
+   * Fetch Meshtastic nodes
+   */
+  async fetchMeshtasticNodes() {
+    try {
+      console.log('Fetching Meshtastic nodes...');
+      const response = await fetch(`${this.apiBaseUrl}/meshtastic/nodes`);
+      if (!response.ok) {
+        throw new Error(`Error: ${response.status}`);
+      }
+      const nodes = await response.json();
+      return nodes;
+    } catch (error) {
+      console.error('Error fetching Meshtastic nodes:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Discover available Meshtastic devices
+   * @param {string} connectionType - Type of connection to discover ('serial', 'ble', or 'all')
+   * @returns {Promise<object>} - Discovery result
+   */
+  async discoverMeshtasticDevices(connectionType = 'all') {
+    try {
+      // Start discovery with the new API
+      const response = await this.authenticatedFetch(`${this.apiBaseUrl}/meshtastic/discover`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ connection_type: connectionType })
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to discover devices');
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error discovering Meshtastic devices:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to discover devices'
+      };
+    }
+  }
+  
+  /**
+   * Get connected Meshtastic devices
+   * @returns {Promise<Array>} - List of connected devices
+   */
+  async getConnectedMeshtasticDevices() {
+    try {
+      // Check if API key is available
+      if (!this.apiKey) {
+        console.warn('API key is required to get connected devices');
+        return [];
+      }
+      
+      // Get connected devices
+      const response = await this.authenticatedFetch(`${this.apiBaseUrl}/meshtastic/devices`);
+      
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          // Authentication error
+          console.warn('Authentication required to access device information');
+          return [];
+        }
+        
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to get connected devices');
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error getting connected Meshtastic devices:', error);
+      return [];
+    }
+  }
+  
+  /**
+   * Connect to a Meshtastic device
+   * @param {string} connectionType - Type of connection ('serial', 'tcp', 'ble')
+   * @param {object} connectionParams - Parameters for the connection
+   * @param {string|null} deviceId - Optional device ID
+   * @returns {Promise<object>} - Connection result
+   */
+  async connectMeshtasticDevice(connectionType, connectionParams, deviceId = null) {
+    try {
+      // Check if API key is available
+      if (!this.apiKey) {
+        console.warn('API key is required to connect to a device');
+        return { success: false, error: 'Authentication required' };
+      }
+      
+      // Prepare request data
+      const requestData = {
+        connection_type: connectionType,
+        connection_params: connectionParams
+      };
+      
+      // Add device ID if provided
+      if (deviceId) {
+        requestData.device_id = deviceId;
+      }
+      
+      // Connect to the device
+      const response = await this.authenticatedFetch(`${this.apiBaseUrl}/meshtastic/connect`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestData)
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to connect to device');
+      }
+      
+      const result = await response.json();
+      
+      // Return a consistent format
+      if (result.success) {
+        console.log(`Connected to device ${result.device_id}`);
+        return {
+          success: true,
+          device_id: result.device_id,
+          message: result.message || 'Successfully connected to device'
+        };
+      } else {
+        console.warn('Device connection failed', result);
+        return {
+          success: false,
+          error: result.error || 'Failed to connect to device'
+        };
+      }
+    } catch (error) {
+      console.error('Error connecting to Meshtastic device:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to connect to device'
+      };
+    }
+  }
+  
+  /**
+   * Disconnect from a Meshtastic device
+   * @param {string} deviceId - Device ID to disconnect
+   * @returns {Promise<object>} - Disconnection result
+   */
+  async disconnectMeshtasticDevice(deviceId) {
+    try {
+      // Check if API key is available
+      if (!this.apiKey) {
+        console.warn('API key is required to disconnect from a device');
+        return { success: false, error: 'Authentication required' };
+      }
+      
+      // Disconnect from the device
+      const response = await this.authenticatedFetch(`${this.apiBaseUrl}/meshtastic/devices/${deviceId}`, {
+        method: 'DELETE'
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to disconnect from device');
+      }
+      
+      const result = await response.json();
+      
+      // Return a consistent format
+      if (result.success) {
+        console.log(`Disconnected from device ${deviceId}`);
+        return {
+          success: true,
+          message: result.message || 'Successfully disconnected from device'
+        };
+      } else {
+        console.warn('Device disconnection failed', result);
+        return {
+          success: false,
+          error: result.error || 'Failed to disconnect from device'
+        };
+      }
+    } catch (error) {
+      console.error('Error disconnecting from Meshtastic device:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to disconnect from device'
+      };
+    }
+  }
+  
+  /**
+   * Get device configuration
+   * @param {string|null} deviceId - Device ID (uses default if null)
+   */
+  async getMeshtasticDeviceConfig(deviceId = null) {
+    try {
+      const endpoint = deviceId 
+        ? `${this.apiBaseUrl}/meshtastic/devices/${deviceId}/config`
+        : `${this.apiBaseUrl}/meshtastic/devices/default/config`;
+        
+      const response = await this.authenticatedFetch(endpoint);
+      
+      if (!response.ok) {
+        // Check for authentication issues
+        if (response.status === 403) {
+          console.error('Authentication required for getting device configuration. Please set a valid API key.');
+          return { success: false, error: 'Authentication required. Please set a valid API key.' };
+        }
+        throw new Error(`Error: ${response.status}`);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error getting Meshtastic device configuration:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  
+  /**
+   * Set device configuration
+   * @param {string} key - Configuration key
+   * @param {any} value - Value to set
+   * @param {string|null} deviceId - Device ID (uses default if null)
+   */
+  async setMeshtasticDeviceConfig(key, value, deviceId = null) {
+    try {
+      const endpoint = deviceId 
+        ? `${this.apiBaseUrl}/meshtastic/devices/${deviceId}/config`
+        : `${this.apiBaseUrl}/meshtastic/devices/default/config`;
+        
+      const response = await this.authenticatedFetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ key, value })
+      });
+      
+      if (!response.ok) {
+        // Check for authentication issues
+        if (response.status === 403) {
+          console.error('Authentication required for setting device configuration. Please set a valid API key.');
+          return { success: false, error: 'Authentication required. Please set a valid API key.' };
+        }
+        throw new Error(`Error: ${response.status}`);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error setting Meshtastic device configuration:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  
+  /**
+   * Get device channel settings
+   * @param {string|null} deviceId - Device ID (uses default if null)
+   */
+  async getMeshtasticDeviceChannels(deviceId = null) {
+    try {
+      const endpoint = deviceId 
+        ? `${this.apiBaseUrl}/meshtastic/devices/${deviceId}/channels`
+        : `${this.apiBaseUrl}/meshtastic/devices/default/channels`;
+        
+      const response = await this.authenticatedFetch(endpoint);
+      
+      if (!response.ok) {
+        // Check for authentication issues
+        if (response.status === 403) {
+          console.error('Authentication required for getting device channels. Please set a valid API key.');
+          return { success: false, error: 'Authentication required. Please set a valid API key.' };
+        }
+        throw new Error(`Error: ${response.status}`);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error getting Meshtastic device channels:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  
+  /**
+   * Set device channel settings
+   * @param {object} settings - Channel settings to update
+   * @param {number} channelIndex - Channel index (default: 0 for primary channel)
+   * @param {string|null} deviceId - Device ID (uses default if null)
+   */
+  async setMeshtasticDeviceChannel(settings, channelIndex = 0, deviceId = null) {
+    try {
+      const endpoint = deviceId 
+        ? `${this.apiBaseUrl}/meshtastic/devices/${deviceId}/channels`
+        : `${this.apiBaseUrl}/meshtastic/devices/default/channels`;
+        
+      const response = await this.authenticatedFetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ settings, channel_index: channelIndex })
+      });
+      
+      if (!response.ok) {
+        // Check for authentication issues
+        if (response.status === 403) {
+          console.error('Authentication required for setting device channels. Please set a valid API key.');
+          return { success: false, error: 'Authentication required. Please set a valid API key.' };
+        }
+        throw new Error(`Error: ${response.status}`);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error setting Meshtastic device channel:', error);
+      return { success: false, error: error.message };
     }
   }
 }
