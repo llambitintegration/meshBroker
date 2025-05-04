@@ -52,17 +52,35 @@ meshBroker/
 - Real-time map visualization of node positions
 - Responsive, modern UI design
 
-### CLI Utility (mosqDev/meshtastic_mqtt_cli.py)
+### CLI Utility (backend/meshtastic_mqtt_cli.py)
 - Send and receive MQTT messages from the command line
 - Supports broker/port/topic selection, QoS, retain, and logging
-- Usage examples:
+- Message decryption and protocol buffer parsing for Meshtastic messages
+- Message relay to different topics with transformations
+- Various output formats (text, JSON, raw)
+- Output redirection to file
+
+#### Basic Usage:
 
 ```bash
 # Send a message
-python mosqDev/meshtastic_mqtt_cli.py --mode send --topic test/topic --message "Hello Mesh!" --broker localhost --port 1883
+python backend/meshtastic_mqtt_cli.py send --topic test/topic --message "Hello Mesh!" --broker localhost --port 1883
 
 # Receive messages
-python mosqDev/meshtastic_mqtt_cli.py --mode receive --topic test/topic --broker localhost --port 1883 --verbose
+python backend/meshtastic_mqtt_cli.py receive --topic test/topic --broker localhost --port 1883
+```
+
+#### Advanced Usage (Phase 3 Features):
+
+```bash
+# Receive messages with decryption enabled and channel key
+python backend/meshtastic_mqtt_cli.py receive --topic "msh/#" --decrypt --channel-key "your-channel-key" 
+
+# Receive and decode messages, output as JSON, and save to file
+python backend/meshtastic_mqtt_cli.py receive --topic "msh/#" --decrypt --keyfile "psk.key" --output-format json --output-file "messages.log"
+
+# Receive, decode, and relay messages to another topic
+python backend/meshtastic_mqtt_cli.py receive --topic "msh/#" --decrypt --channel-key "your-channel-key" --relay --relay-topic "relay/{node_id}/message"
 ```
 
 ## Getting Started
@@ -103,7 +121,7 @@ node server.js
 
 ## Progress
 
-The project is actively being developed according to the checklist in `backend/checklist.md` and `mosqDev/phase1_cli_mqtt_pubsub.md`. Key milestones achieved:
+The project is actively being developed according to the checklist in `backend/checklist.md` and the Meshtastic MQTT CLI roadmap. Key milestones achieved:
 
 - ✅ Core MQTT functionality with message persistence
 - ✅ Meshtastic integration with node management
@@ -112,6 +130,7 @@ The project is actively being developed according to the checklist in `backend/c
 - ✅ Initial frontend integration with WebSocket connectivity
 - ✅ Map visualization with Leaflet integration
 - ✅ CLI utility for MQTT send/receive (Phase 1)
+- ✅ CLI utility: Message decryption and relay (Phase 3)
 
 ## Next Steps
 
@@ -124,7 +143,7 @@ The following features are currently in development:
 - User authentication UI
 - Mobile responsiveness and cross-browser compatibility
 - Progressive Web App capabilities
-- CLI utility: advanced features, device management, message decryption (see mosqDev/meshtastic_mqtt_cli_roadmap.md)
+- CLI utility: Daemonization and advanced features (Phase 4)
 
 ## License
 

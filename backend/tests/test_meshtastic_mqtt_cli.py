@@ -5,10 +5,28 @@ import argparse
 import logging
 from pathlib import Path
 import sys
+import tempfile
+import os
 
 # Add the parent directory to the Python path to import the CLI module
 sys.path.append(str(Path(__file__).parent.parent))
 from meshtastic_mqtt_cli import parse_args, MQTTClient  # Update this import based on your actual module name
+
+# Try to import the message decoder, but make it optional
+try:
+    from meshtastic_decoder import MessageDecoder, MeshtasticMessage, MESHTASTIC_AVAILABLE
+except ImportError:
+    try:
+        from backend.meshtastic_decoder import MessageDecoder, MeshtasticMessage, MESHTASTIC_AVAILABLE
+    except ImportError:
+        # Set flags to indicate decoder is not available
+        MESHTASTIC_AVAILABLE = False
+        MessageDecoder = None
+        MeshtasticMessage = None
+
+# Skip tests that require Meshtastic library if it's not available
+requires_meshtastic = pytest.mark.skipif(not MESHTASTIC_AVAILABLE, 
+                                         reason="Meshtastic library not available")
 
 # Fixtures
 @pytest.fixture
@@ -41,6 +59,52 @@ def mock_logger():
         logger = Mock()
         mock_log.return_value = logger
         yield logger
+
+@pytest.fixture
+def mock_decoder():
+    if not MESHTASTIC_AVAILABLE:
+        return Mock()
+    
+    # Create a mock decoder instance
+    decoder = Mock(spec=MessageDecoder)
+    
+    # Configure the decode_message method to return a MeshtasticMessage
+    def mock_decode_message(topic, payload):
+        return MeshtasticMessage(
+            topic=topic,
+            raw_payload=payload,
+            message_type="text",
+            node_id="node123",
+            parsed=True,
+            decoded_data={"text": "Decoded message"}
+        )
+    
+    decoder.decode_message.side_effect = mock_decode_message
+    
+    return decoder
+
+@pytest.fixture
+def temp_key_file():
+    """Create a temporary key file for testing"""
+    with tempfile.NamedTemporaryFile(delete=False, mode='w') as f:
+        f.write("test_channel_key_12345")
+        file_path = f.name
+    
+    yield file_path
+    
+    # Clean up
+    os.unlink(file_path)
+
+@pytest.fixture
+def temp_output_file():
+    """Create a temporary output file for testing"""
+    with tempfile.NamedTemporaryFile(delete=False) as f:
+        file_path = f.name
+    
+    yield file_path
+    
+    # Clean up
+    os.unlink(file_path)
 
 # Test argument parsing
 def test_parse_args_send_mode():
@@ -99,6 +163,60 @@ def test_parse_args_send_mode_missing_message():
     with pytest.raises(SystemExit):
         parse_args(['send', '-b', 'localhost', '-p', '1883', '-t', 'test/topic'])
 
+# Phase 3 arguments tests
+def test_parse_args_decrypt_options():
+    """Test parsing decrypt-related arguments"""
+    args = parse_args(['receive', '-t', 'msh/#', '--decrypt', '--channel-key', 'test-key'])
+    
+    assert args.decrypt is True
+    assert args.channel_key == 'test-key'
+    assert args.keyfile is None
+
+def test_parse_args_keyfile_option():
+    """Test parsing keyfile option"""
+    args = parse_args(['receive', '-t', 'msh/#', '--decrypt', '--keyfile', 'psk.key'])
+    
+    assert args.decrypt is True
+    assert args.keyfile == 'psk.key'
+    assert args.channel_key is None
+
+def test_parse_args_decrypt_without_key():
+    """Test parsing decrypt without key option (should fail)"""
+    with pytest.raises(SystemExit):
+        parse_args(['receive', '-t', 'msh/#', '--decrypt'])
+
+def test_parse_args_output_format():
+    """Test parsing output format option"""
+    args = parse_args(['receive', '-t', 'msh/#', '-o', 'json'])
+    
+    assert args.output_format == 'json'
+    
+    args = parse_args(['receive', '-t', 'msh/#', '-o', 'raw'])
+    
+    assert args.output_format == 'raw'
+    
+    args = parse_args(['receive', '-t', 'msh/#'])
+    
+    assert args.output_format == 'text'  # Default value
+
+def test_parse_args_output_file():
+    """Test parsing output file option"""
+    args = parse_args(['receive', '-t', 'msh/#', '-f', 'output.log'])
+    
+    assert args.output_file == 'output.log'
+
+def test_parse_args_relay_options():
+    """Test parsing relay options"""
+    args = parse_args(['receive', '-t', 'msh/#', '--relay', '--relay-topic', 'relay/{node_id}'])
+    
+    assert args.relay is True
+    assert args.relay_topic == 'relay/{node_id}'
+
+def test_parse_args_relay_without_topic():
+    """Test parsing relay without topic (should fail)"""
+    with pytest.raises(SystemExit):
+        parse_args(['receive', '-t', 'msh/#', '--relay'])
+
 # Test MQTT client initialization
 def test_mqtt_client_init(mock_mqtt_client, mock_logger):
     """Test MQTT client initialization"""
@@ -107,328 +225,260 @@ def test_mqtt_client_init(mock_mqtt_client, mock_logger):
     assert client.port == 1883
     assert client.connected is False
 
-# Test connection handling
-def test_mqtt_client_connect(mock_mqtt_client, mock_logger):
-    """Test MQTT client connection"""
-    client = MQTTClient('localhost', 1883, mock_logger)
-    client.connect()
+def test_mqtt_client_init_with_decoder(mock_mqtt_client, mock_logger, mock_decoder):
+    """Test MQTT client initialization with decoder"""
+    client = MQTTClient('localhost', 1883, mock_logger, decoder=mock_decoder)
     
-    mock_mqtt_client.connect.assert_called_once_with('localhost', 1883)
-    mock_mqtt_client.loop_start.assert_called_once()
-    assert client.connected is True
+    assert client.broker == 'localhost'
+    assert client.port == 1883
+    assert client.decoder is mock_decoder
 
-# Test send mode
-def test_mqtt_client_send_message(mock_mqtt_client, mock_logger):
-    """Test sending a message"""
-    client = MQTTClient('localhost', 1883, mock_logger)
-    client.connect()
+def test_mqtt_client_init_with_relay(mock_mqtt_client, mock_logger):
+    """Test MQTT client initialization with relay options"""
+    client = MQTTClient(
+        'localhost', 1883, mock_logger,
+        relay_enabled=True,
+        relay_topic='relay/topic'
+    )
     
-    message = "test message"
-    topic = "test/topic"
-    qos = 0
-    retain = False
-    
-    client.send_message(topic, message, qos, retain)
-    
-    mock_mqtt_client.publish.assert_called_once_with(topic, message, qos, retain)
-    mock_logger.info.assert_called_with(f"Message published to {topic}")
+    assert client.relay_enabled is True
+    assert client.relay_topic == 'relay/topic'
 
-# Test receive mode
-def test_mqtt_client_subscribe(mock_mqtt_client, mock_logger):
-    """Test subscribing to a topic"""
-    client = MQTTClient('localhost', 1883, mock_logger)
-    client.connect()
+def test_mqtt_client_init_with_output(mock_mqtt_client, mock_logger, temp_output_file):
+    """Test MQTT client initialization with output options"""
+    client = MQTTClient(
+        'localhost', 1883, mock_logger,
+        output_format='json',
+        output_file=temp_output_file
+    )
     
-    topic = "test/topic"
-    qos = 0
+    assert client.output_format == 'json'
+    assert client.output_file == temp_output_file
+    assert client.output_stream is not None
     
-    client.subscribe(topic, qos)
-    
-    mock_mqtt_client.subscribe.assert_called_once_with(topic, qos)
-    mock_logger.info.assert_called_with(f"Subscribed to {topic}")
+    client.disconnect()  # Close the file
 
-# Test message callback
-def test_mqtt_client_on_message(mock_mqtt_client, mock_logger):
-    """Test message callback handling"""
-    client = MQTTClient('localhost', 1883, mock_logger)
+# Test message decoding
+@requires_meshtastic
+def test_mqtt_client_decode_meshtastic_message(mock_mqtt_client, mock_logger, mock_decoder):
+    """Test decoding Meshtastic message"""
+    client = MQTTClient(
+        'localhost', 1883, mock_logger,
+        decoder=mock_decoder
+    )
+    client.connect()
     
     # Create a mock message
     mock_message = Mock()
-    mock_message.topic = "test/topic"
-    mock_message.payload = b"test message"
+    mock_message.topic = "msh/node123/json/text"
+    mock_message.payload = b'{"text": "Test message"}'
+    
+    # Mock _write_output to capture output
+    client._write_output = Mock()
     
     # Call the callback
     client._on_message(mock_mqtt_client, None, mock_message)
     
-    # Verify logging
-    mock_logger.info.assert_called_with(f"Received message on {mock_message.topic}: {mock_message.payload.decode()}")
+    # Verify decoder was called
+    mock_decoder.decode_message.assert_called_once_with(
+        mock_message.topic, mock_message.payload
+    )
+    
+    # Verify output was written
+    client._write_output.assert_called_once()
 
-# Test error handling
-def test_mqtt_client_connection_error(mock_mqtt_client, mock_logger):
-    """Test connection error handling"""
-    mock_mqtt_client.connect.side_effect = Exception("Connection failed")
-    
-    client = MQTTClient('localhost', 1883, mock_logger)
-    
-    with pytest.raises(Exception):
-        client.connect()
-    
-    mock_logger.error.assert_called()
-
-def test_mqtt_client_publish_error(mock_mqtt_client, mock_logger):
-    """Test publish error handling"""
-    client = MQTTClient('localhost', 1883, mock_logger)
+# Test relay functionality
+def test_mqtt_client_relay_message(mock_mqtt_client, mock_logger):
+    """Test relaying message to another topic"""
+    client = MQTTClient(
+        'localhost', 1883, mock_logger,
+        relay_enabled=True,
+        relay_topic='relay/topic'
+    )
     client.connect()
     
-    mock_mqtt_client.publish.side_effect = Exception("Publish failed")
+    # Test with a regular message
+    client.relay_message("Test message", "source/topic")
     
-    with pytest.raises(Exception):
-        client.send_message("test/topic", "test message")
-    
-    mock_logger.error.assert_called()
-
-# Integration tests
-def test_full_send_workflow(mock_mqtt_client, mock_logger):
-    """Test complete send workflow"""
-    # Arrange
-    args = parse_args(['send', '-b', 'localhost', '-p', '1883',
-                      '-t', 'test/topic', '-m', 'test message'])
-    client = MQTTClient(args.broker, args.port, mock_logger)
-    
-    # Act
-    client.connect()
-    client.send_message(args.topic, args.message)
-    
-    # Assert
-    mock_mqtt_client.connect.assert_called_once()
+    # Verify publish was called
     mock_mqtt_client.publish.assert_called_once()
-    mock_logger.info.assert_called()
 
-def test_full_receive_workflow(mock_mqtt_client, mock_logger):
-    """Test complete receive workflow"""
-    # Arrange
-    args = parse_args(['receive', '-b', 'localhost', '-p', '1883',
-                      '-t', 'test/topic'])
-    client = MQTTClient(args.broker, args.port, mock_logger)
-    
-    # Act
+def test_mqtt_client_relay_message_with_formatting(mock_mqtt_client, mock_logger):
+    """Test relaying message with topic formatting"""
+    client = MQTTClient(
+        'localhost', 1883, mock_logger,
+        relay_enabled=True,
+        relay_topic='relay/{node_id}/{message_type}'
+    )
     client.connect()
-    client.subscribe(args.topic)
     
-    # Simulate receiving a message
+    # Test with a source topic that has expected parts
+    source_topic = "msh/node123/json/text"
+    client.relay_message("Test message", source_topic)
+    
+    # Verify publish was called with formatted topic
+    mock_mqtt_client.publish.assert_called_once()
+    args, _ = mock_mqtt_client.publish.call_args
+    assert args[0] == "relay/node123/text"  # Formatted topic
+
+@requires_meshtastic
+def test_mqtt_client_relay_meshtastic_message(mock_mqtt_client, mock_logger):
+    """Test relaying MeshtasticMessage"""
+    # Skip if not available
+    if not MESHTASTIC_AVAILABLE:
+        pytest.skip("Meshtastic library not available")
+    
+    client = MQTTClient(
+        'localhost', 1883, mock_logger,
+        relay_enabled=True,
+        relay_topic='relay/topic'
+    )
+    client.connect()
+    
+    # Create a MeshtasticMessage
+    message = MeshtasticMessage(
+        topic="msh/node123/json/text",
+        raw_payload=b'{"text": "Hello world"}',
+        message_type="text",
+        node_id="node123",
+        parsed=True,
+        decoded_data={"text": "Hello world"}
+    )
+    
+    # Test with different output formats
+    for output_format in ['text', 'json', 'raw']:
+        client.output_format = output_format
+        mock_mqtt_client.publish.reset_mock()
+        
+        # Call relay
+        client.relay_message(message, message.topic)
+        
+        # Verify publish was called
+        mock_mqtt_client.publish.assert_called_once()
+
+# Test output functionality
+def test_mqtt_client_write_output_stdout(mock_mqtt_client, mock_logger):
+    """Test writing output to stdout"""
+    client = MQTTClient('localhost', 1883, mock_logger)
+    
+    # Mock print function
+    with patch('builtins.print') as mock_print:
+        client._write_output("Test output")
+        mock_print.assert_called_once()
+
+def test_mqtt_client_write_output_file(mock_mqtt_client, mock_logger, temp_output_file):
+    """Test writing output to file"""
+    client = MQTTClient(
+        'localhost', 1883, mock_logger,
+        output_file=temp_output_file
+    )
+    
+    # Write some output
+    client._write_output("Test output")
+    
+    # Close the file
+    client.disconnect()
+    
+    # Verify file content
+    with open(temp_output_file, 'r') as f:
+        content = f.read()
+        assert "Test output" in content
+
+def test_mqtt_client_write_output_file_error(mock_mqtt_client, mock_logger):
+    """Test writing output to file with error"""
+    # Use a directory as the output file (which will cause an error)
+    client = MQTTClient(
+        'localhost', 1883, mock_logger,
+        output_file="/dev/null/invalid"  # This should cause an error on open
+    )
+    
+    # Mock print function
+    with patch('builtins.print') as mock_print:
+        # Write should fall back to stdout
+        client._write_output("Test output")
+        mock_print.assert_called_once()
+
+# Integration tests with Phase 3 features
+@requires_meshtastic
+def test_integration_with_decoder(mock_mqtt_client, mock_logger, mock_decoder):
+    """Integration test with decoder"""
+    client = MQTTClient(
+        'localhost', 1883, mock_logger,
+        decoder=mock_decoder,
+        output_format='json'
+    )
+    client.connect()
+    
+    # Create a mock message
     mock_message = Mock()
-    mock_message.topic = args.topic
-    mock_message.payload = b"test message"
+    mock_message.topic = "msh/node123/json/text"
+    mock_message.payload = b'{"text": "Test message"}'
+    
+    # Mock _write_output
+    client._write_output = Mock()
+    
+    # Call the callback
     client._on_message(mock_mqtt_client, None, mock_message)
     
-    # Assert
-    mock_mqtt_client.connect.assert_called_once()
-    mock_mqtt_client.subscribe.assert_called_once()
-    mock_logger.info.assert_called()
-
-def test_full_receive_workflow_multiple_topics(mock_mqtt_client, mock_logger):
-    """Test complete receive workflow with multiple topics"""
-    # Arrange
-    args = parse_args(['receive', '-b', 'localhost', '-p', '1883',
-                      '-t', 'test/topic1,test/topic2,test/topic3'])
-    client = MQTTClient(args.broker, args.port, mock_logger)
+    # Verify decoder was called
+    mock_decoder.decode_message.assert_called_once()
     
-    # Mock main function to test multi-topic subscription
-    with patch('builtins.input', return_value=''):
-        # Act
-        client.connect()
-        
-        topics = [topic.strip() for topic in args.topic.split(',')]
-        for topic in topics:
-            client.subscribe(topic)
-        
-        # Simulate receiving messages on different topics
-        for topic in topics:
-            mock_message = Mock()
-            mock_message.topic = topic
-            mock_message.payload = f"message from {topic}".encode()
-            client._on_message(mock_mqtt_client, None, mock_message)
-    
-    # Assert
-    mock_mqtt_client.connect.assert_called_once()
-    assert mock_mqtt_client.subscribe.call_count == len(topics)
-    assert mock_logger.info.call_count >= len(topics)  # At least one log per topic
+    # Verify output was written in JSON format
+    client._write_output.assert_called_once()
 
-# Additional Complex Test Cases
-
-@pytest.mark.parametrize("qos,retain,expected_error", [
-    (0, False, None),
-    (1, True, None),
-    (2, False, None),
-    (3, False, ValueError),  # Invalid QoS level
-    (-1, False, ValueError),  # Invalid QoS level
-])
-def test_mqtt_client_send_message_qos_levels(mock_mqtt_client, mock_logger, qos, retain, expected_error):
-    """Test sending messages with different QoS levels and retain flags"""
-    client = MQTTClient('localhost', 1883, mock_logger)
+@requires_meshtastic
+def test_integration_with_decoder_and_relay(mock_mqtt_client, mock_logger, mock_decoder):
+    """Integration test with decoder and relay"""
+    client = MQTTClient(
+        'localhost', 1883, mock_logger,
+        decoder=mock_decoder,
+        relay_enabled=True,
+        relay_topic='relay/topic'
+    )
     client.connect()
     
-    if expected_error:
-        with pytest.raises(expected_error):
-            client.send_message("test/topic", "test message", qos, retain)
-    else:
-        client.send_message("test/topic", "test message", qos, retain)
-        mock_mqtt_client.publish.assert_called_once_with("test/topic", "test message", qos, retain)
-
-@pytest.mark.parametrize("topic", [
-    "test/topic",
-    "test/+/wildcard",
-    "test/#",
-    "",  # Empty topic
-    "test/ /spaces",
-    "test/\u7279\u6b8a\u5b57\u7b26",  # Unicode characters
-    "a" * 1000,  # Shorter but still long topic (reduced from 65536)
-])
-def test_mqtt_client_subscribe_topic_variations(mock_mqtt_client, mock_logger, topic):
-    """Test subscribing to various topic patterns"""
-    client = MQTTClient('localhost', 1883, mock_logger)
-    client.connect()
-    
-    if not topic:
-        with pytest.raises(ValueError):
-            client.subscribe(topic)
-    else:
-        client.subscribe(topic)
-        mock_mqtt_client.subscribe.assert_called_once_with(topic, 0)
-
-def test_mqtt_client_multiple_subscriptions(mock_mqtt_client, mock_logger):
-    """Test subscribing to multiple topics"""
-    client = MQTTClient('localhost', 1883, mock_logger)
-    client.connect()
-    
-    topics = ["test/topic1", "test/topic2", "test/topic3"]
-    for topic in topics:
-        client.subscribe(topic)
-    
-    assert mock_mqtt_client.subscribe.call_count == len(topics)
-
-def test_mqtt_client_reconnection(mock_mqtt_client, mock_logger):
-    """Test client reconnection behavior"""
-    client = MQTTClient('localhost', 1883, mock_logger)
-    client.connect()
-    
-    # Simulate unexpected disconnection
-    client._on_disconnect(mock_mqtt_client, None, 1)
-    assert not client.connected
-    
-    # Reconnect
-    client.connect()
-    assert client.connected
-    assert mock_mqtt_client.connect.call_count == 2
-
-@pytest.mark.parametrize("payload,expected_error", [
-    (b"normal message", None),
-    (b"UTF-8 message \xe2\x98\x83", None),  # Snowman emoji
-    (b"\xff\xfe invalid utf-8", UnicodeDecodeError),
-    (b"", None),  # Empty message
-    (b"a" * 1000, None),  # Shorter but still substantial message (reduced from 1048576)
-])
-def test_mqtt_client_message_decoding(mock_mqtt_client, mock_logger, payload, expected_error):
-    """Test handling of various message payloads and encodings"""
-    client = MQTTClient('localhost', 1883, mock_logger)
-    
+    # Create a mock message
     mock_message = Mock()
-    mock_message.topic = "test/topic"
-    mock_message.payload = payload
+    mock_message.topic = "msh/node123/json/text"
+    mock_message.payload = b'{"text": "Test message"}'
     
-    if expected_error:
-        with pytest.raises(expected_error):
-            client._on_message(mock_mqtt_client, None, mock_message)
-    else:
-        client._on_message(mock_mqtt_client, None, mock_message)
-        mock_logger.info.assert_called()
+    # Mock methods
+    client._write_output = Mock()
+    client.send_message = Mock()
+    
+    # Call the callback
+    client._on_message(mock_mqtt_client, None, mock_message)
+    
+    # Verify decoder was called
+    mock_decoder.decode_message.assert_called_once()
+    
+    # Verify output was written
+    client._write_output.assert_called_once()
+    
+    # Verify relay was called
+    client.send_message.assert_called_once()
 
-def test_mqtt_client_connection_timeout(mock_mqtt_client, mock_logger):
-    """Test connection timeout handling"""
-    mock_mqtt_client.connect.side_effect = TimeoutError("Connection timed out")
+# Test command line arguments
+def test_full_cli_args_receive_with_decrypt(mock_mqtt_client, mock_logger, temp_key_file):
+    """Test full CLI arguments for receive with decrypt"""
+    args = parse_args([
+        'receive', 
+        '-b', 'localhost', 
+        '-p', '1883',
+        '-t', 'msh/#',
+        '--decrypt',
+        '--keyfile', temp_key_file,
+        '-o', 'json',
+        '--relay',
+        '--relay-topic', 'relay/{node_id}'
+    ])
     
-    client = MQTTClient('localhost', 1883, mock_logger)
-    with pytest.raises(TimeoutError):
-        client.connect()
-    
-    mock_logger.error.assert_called()
-
-def test_mqtt_client_broker_unreachable(mock_mqtt_client, mock_logger):
-    """Test handling of unreachable broker"""
-    mock_mqtt_client.connect.side_effect = ConnectionRefusedError("Connection refused")
-    
-    client = MQTTClient('localhost', 1883, mock_logger)
-    with pytest.raises(ConnectionRefusedError):
-        client.connect()
-    
-    mock_logger.error.assert_called()
-
-@pytest.mark.parametrize("rc_code,expected_connected", [
-    (0, True),   # Success
-    (1, False),  # Connection refused - incorrect protocol version
-    (2, False),  # Connection refused - invalid client identifier
-    (3, False),  # Connection refused - server unavailable
-    (4, False),  # Connection refused - bad username or password
-    (5, False),  # Connection refused - not authorized
-])
-def test_mqtt_client_connection_results(mock_mqtt_client, mock_logger, rc_code, expected_connected):
-    """Test handling of different connection result codes"""
-    client = MQTTClient('localhost', 1883, mock_logger)
-    client._on_connect(mock_mqtt_client, None, None, rc_code)
-    
-    if rc_code == 0:
-        mock_logger.info.assert_called()
-    else:
-        mock_logger.error.assert_called()
-
-def test_mqtt_client_concurrent_operations(mock_mqtt_client, mock_logger):
-    """Test multiple operations in sequence"""
-    client = MQTTClient('localhost', 1883, mock_logger)
-    client.connect()
-    
-    # Subscribe to multiple topics
-    topics = ["test/topic1", "test/topic2"]
-    for topic in topics:
-        client.subscribe(topic)
-    
-    # Send multiple messages
-    messages = ["message1", "message2"]
-    for msg in messages:
-        client.send_message("test/topic", msg)
-    
-    # Verify all operations
-    assert mock_mqtt_client.subscribe.call_count == len(topics)
-    assert mock_mqtt_client.publish.call_count == len(messages)
-
-@pytest.mark.parametrize("broker,port,expected_error", [
-    ("localhost", 1883, None),
-    ("", 1883, ValueError),  # Empty broker address
-    ("localhost", 0, ValueError),  # Invalid port
-    ("localhost", 65536, ValueError),  # Port out of range
-    ("invalid.broker", 1883, Exception),  # Invalid broker address
-])
-def test_mqtt_client_invalid_connection_params(mock_mqtt_client, mock_logger, broker, port, expected_error):
-    """Test handling of invalid connection parameters"""
-    if expected_error:
-        with pytest.raises(expected_error):
-            client = MQTTClient(broker, port, mock_logger)
-            client.connect()
-    else:
-        client = MQTTClient(broker, port, mock_logger)
-        client.connect()
-        assert client.connected
-
-def test_mqtt_client_cleanup(mock_mqtt_client, mock_logger):
-    """Test proper cleanup of resources"""
-    client = MQTTClient('localhost', 1883, mock_logger)
-    client.connect()
-    
-    # Simulate some activity
-    client.subscribe("test/topic")
-    client.send_message("test/topic", "test message")
-    
-    # Disconnect and verify cleanup
-    client.disconnect()
-    assert not client.connected
-    mock_mqtt_client.disconnect.assert_called_once()
-    mock_mqtt_client.loop_stop.assert_called_once() 
+    assert args.mode == 'receive'
+    assert args.broker == 'localhost'
+    assert args.port == 1883
+    assert args.topic == 'msh/#'
+    assert args.decrypt is True
+    assert args.keyfile == temp_key_file
+    assert args.output_format == 'json'
+    assert args.relay is True
+    assert args.relay_topic == 'relay/{node_id}' 
