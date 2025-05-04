@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import os
+import time
 
 # Add the parent directory to the Python path to import the CLI module
 sys.path.append(str(Path(__file__).parent.parent))
@@ -98,13 +99,33 @@ def temp_key_file():
 @pytest.fixture
 def temp_output_file():
     """Create a temporary output file for testing"""
+    # Create a temporary file but close it right away so the handle isn't kept open
     with tempfile.NamedTemporaryFile(delete=False) as f:
         file_path = f.name
+        f.close()  # Explicitly close the file handle
     
     yield file_path
     
-    # Clean up
-    os.unlink(file_path)
+    # Clean up - make sure any remaining handles are closed before deletion
+    try:
+        if os.path.exists(file_path):
+            os.close(os.open(file_path, os.O_RDONLY))  # Try to close any remaining handles
+    except:
+        pass
+
+    # Try to delete the file with retries
+    for i in range(3):
+        try:
+            if os.path.exists(file_path):
+                os.unlink(file_path)
+            break
+        except PermissionError:
+            # Wait briefly and try again
+            time.sleep(0.5)
+            # If this is the last attempt, don't suppress the error
+            if i == 2:
+                # Just log the error instead of raising an exception
+                print(f"Warning: Could not delete temporary file {file_path}")
 
 # Test argument parsing
 def test_parse_args_send_mode():

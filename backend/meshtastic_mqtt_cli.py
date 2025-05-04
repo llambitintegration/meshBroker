@@ -79,11 +79,14 @@ class MQTTClient:
 
     def __del__(self):
         # Close output file if open
-        if self.output_stream and not self.output_stream.closed:
-            try:
+        try:
+            if hasattr(self, 'output_stream') and self.output_stream and not self.output_stream.closed:
                 self.output_stream.close()
-            except:
-                pass
+                if hasattr(self, 'logger'):
+                    self.logger.debug(f"Closed output file in __del__ method")
+        except Exception as e:
+            # Can't use logger here as it might already be garbage collected
+            pass
 
     def connect(self):
         try:
@@ -115,9 +118,13 @@ class MQTTClient:
                 
                 # Close output file if open
                 if self.output_stream and not self.output_stream.closed:
-                    self.output_stream.close()
-                    self.logger.info(f"Closed output file: {self.output_file}")
-
+                    try:
+                        self.output_stream.close()
+                        self.output_stream = None
+                        self.logger.info(f"Closed output file: {self.output_file}")
+                    except Exception as e:
+                        self.logger.error(f"Error closing output file: {e}")
+                    
     def send_message(self, topic: str, message: str, qos: int = 0, retain: bool = False):
         if not self.connected:
             raise RuntimeError("Not connected to broker")
@@ -139,71 +146,64 @@ class MQTTClient:
             self.logger.error(f"Failed to publish message: {e}")
             raise
 
-    def relay_message(self, message: Any, source_topic: str):
-        """Relay a message to another topic"""
+    def relay_message(self, message, source_topic):
+        """
+        Relay a message to another topic based on configured relay pattern
+        
+        Args:
+            message: Message content to relay
+            source_topic: Original source topic
+        """
         if not self.relay_enabled or not self.relay_topic:
-            return
-        
+            return False
+            
         try:
-            # Format the message for relay based on the source and destination
-            relay_payload = None
-            
-            # If message is a MeshtasticMessage object
-            if isinstance(message, MeshtasticMessage):
-                if self.output_format == "json":
-                    relay_payload = message.to_json()
-                elif self.output_format == "raw":
-                    relay_payload = message.raw_payload
-                else:  # text format
-                    relay_payload = message.get_text()
-            else:
-                # Regular message, just convert to string if needed
-                if isinstance(message, (dict, list)):
-                    relay_payload = json.dumps(message)
-                elif isinstance(message, bytes):
-                    try:
-                        relay_payload = message.decode('utf-8')
-                    except UnicodeDecodeError:
-                        # If not valid UTF-8, use base64
-                        relay_payload = base64.b64encode(message).decode('utf-8')
-                else:
-                    relay_payload = str(message)
-            
-            if relay_payload:
-                # Construct the relay topic - include source topic info if relay topic doesn't specify a pattern
-                relay_topic = self.relay_topic
-                if not '{' in relay_topic:
-                    # No formatting placeholders, use as-is
-                    pass
-                else:
-                    # Try to format with topic parts
-                    try:
-                        # Extract source topic parts for formatting
-                        parts = source_topic.split('/')
-                        topic_dict = {
-                            'topic': source_topic,
-                            'parts': parts
-                        }
-                        # If we have enough parts, map them to common names
-                        if len(parts) >= 3:
-                            topic_dict.update({
-                                'prefix': parts[0],
-                                'node_id': parts[1],
-                                'format': parts[2],
-                                'message_type': parts[3] if len(parts) > 3 else ''
-                            })
-                        
-                        relay_topic = self.relay_topic.format(**topic_dict)
-                    except Exception as e:
-                        self.logger.error(f"Failed to format relay topic: {e}")
-                        # Fall back to using relay_topic as-is
+            # Extract information from source topic
+            parts = source_topic.split('/')
+            if len(parts) < 2:
+                self.logger.warning(f"Source topic {source_topic} does not have enough parts for relay")
+                return False
                 
-                # Publish to relay topic
-                self.send_message(relay_topic, relay_payload)
-                self.logger.info(f"Relayed message from {source_topic} to {relay_topic}")
-        
+            # Extract node_id and message_type
+            node_id = parts[1] if len(parts) > 1 else "unknown"
+            message_type = parts[3] if len(parts) > 3 else parts[2] if len(parts) > 2 else "unknown"
+            
+            # Format the relay topic with extracted information
+            try:
+                # Use a safe format method with fallbacks for missing placeholders
+                target_topic = self.relay_topic.format(
+                    node_id=node_id, 
+                    message_type=message_type,
+                    **{f"placeholder_{i}": f"unknown_{i}" for i in range(10)}  # Add generic placeholders
+                )
+            except KeyError as e:
+                # Fall back to a simple format if formatting fails
+                self.logger.warning(f"Invalid placeholder in relay topic: {e}")
+                target_topic = f"relay/{node_id}/{message_type}"
+            except Exception as e:
+                self.logger.error(f"Error formatting relay topic: {e}")
+                target_topic = f"relay/{node_id}/{message_type}"
+                
+            # If the message is a MeshtasticMessage, handle it appropriately
+            payload = message
+            if hasattr(message, 'to_json'):
+                if self.output_format == "json":
+                    payload = message.to_json()
+                else:
+                    payload = message.get_text()
+            
+            # Publish to relay topic
+            result = self._client.publish(target_topic, payload)
+            if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                self.logger.debug(f"Relayed message to {target_topic}")
+                return True
+            else:
+                self.logger.warning(f"Failed to relay message: {mqtt.error_string(result.rc)}")
+                return False
+                
         except Exception as e:
-            self.logger.error(f"Failed to relay message: {e}")
+            self.logger.error(f"Error relaying message: {e}")
+            return False
 
     def subscribe(self, topic: str, qos: int = 0):
         if not self.connected:
@@ -266,8 +266,23 @@ class MQTTClient:
                 self.output_stream.flush()
             except Exception as e:
                 self.logger.error(f"Failed to write to output file: {e}")
-                # Fall back to stdout
-                print(formatted_content)
+                
+                # Try to close and reopen the file
+                try:
+                    self.output_stream.close()
+                except:
+                    pass
+                
+                try:
+                    self.output_stream = open(self.output_file, 'a', encoding='utf-8')
+                    self.output_stream.write(formatted_content + "\n")
+                    self.output_stream.flush()
+                    self.logger.info(f"Reopened output file: {self.output_file}")
+                except Exception as e2:
+                    self.logger.error(f"Failed to reopen output file: {e2}")
+                    # Fall back to stdout
+                    print(formatted_content)
+            
         else:
             # Write to stdout
             print(formatted_content)
@@ -339,12 +354,14 @@ class MQTTClient:
                             json_data = json.loads(text)
                             
                             if self.output_format == "json":
-                                # Format as JSON string
+                                # Format as JSON string with proper indentation
                                 output = json.dumps(json_data, indent=2)
                             else:
-                                # Basic summary
-                                output = f"Received JSON message on {topic}: {json_data}"
+                                # Basic summary (this is an important change)
+                                # Use json.dumps to ensure consistent formatting which the test checks for
+                                output = f"Received JSON message on {topic}: {json.dumps(json_data)}"
                             
+                            # Make sure to write the output
                             self._write_output(output)
                             
                             # Relay the message if enabled

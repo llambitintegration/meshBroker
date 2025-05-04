@@ -5,6 +5,8 @@ import json
 import threading
 from unittest.mock import MagicMock, patch
 import paho.mqtt.client as mqtt
+import logging
+from paho.mqtt.enums import CallbackAPIVersion
 
 from backend.mqtt_handler import MQTTHandler
 from backend.config import settings
@@ -16,6 +18,8 @@ TEST_CLIENT_ID = "test_client"
 TEST_TOPIC = "test/topic"
 TEST_PAYLOAD = "test_payload"
 TEST_QOS = 1
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
@@ -290,12 +294,13 @@ def test_integration_mqtt_publish_subscribe():
     if os.getenv("SKIP_INTEGRATION_TESTS", "true").lower() == "true":
         pytest.skip("Skipping integration test")
     
-    # Create a real handler
+    # Create a real handler with loopback explicitly enabled
     handler = MQTTHandler(
         broker_host=settings.MQTT_BROKER_HOST,
         broker_port=settings.MQTT_BROKER_PORT,
         client_id="integration_test_client",
-        persistence_enabled=False
+        persistence_enabled=False,
+        loopback_enabled=True  # Ensure client receives its own published messages
     )
     
     # Connect
@@ -303,6 +308,9 @@ def test_integration_mqtt_publish_subscribe():
     
     # Wait for connection
     time.sleep(1)
+    
+    # Add additional logging for debugging
+    logger.info(f"INTEGRATION TEST: Connected to broker: {handler.is_connected()}")
     
     # Test message received flag
     message_received = threading.Event()
@@ -313,26 +321,39 @@ def test_integration_mqtt_publish_subscribe():
     # Message callback
     def on_message(topic, payload):
         nonlocal received_payload
+        logger.info(f"INTEGRATION TEST: Message callback called with topic: {topic}")
         if topic == test_topic:
             try:
-                received_payload = json.loads(payload.decode('utf-8'))
+                if isinstance(payload, bytes):
+                    payload_str = payload.decode('utf-8')
+                    logger.info(f"INTEGRATION TEST: Decoded payload: {payload_str}")
+                    received_payload = json.loads(payload_str)
+                else:
+                    logger.info(f"INTEGRATION TEST: Non-bytes payload: {payload}")
+                    received_payload = json.loads(payload)
+                logger.info(f"INTEGRATION TEST: Setting message_received event")
                 message_received.set()
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"INTEGRATION TEST: Error processing message: {e}")
     
     # Set callback
     handler.set_message_callback(on_message)
     
     # Subscribe
+    logger.info(f"INTEGRATION TEST: Subscribing to {test_topic}")
     handler.subscribe(test_topic)
     
     # Wait for subscription to take effect
     time.sleep(1)
     
     # Publish
-    handler.publish(test_topic, json.dumps(test_payload))
+    json_payload = json.dumps(test_payload)
+    logger.info(f"INTEGRATION TEST: Publishing to {test_topic}: {json_payload}")
+    result = handler.publish(test_topic, json_payload)
+    logger.info(f"INTEGRATION TEST: Publish result: {result}")
     
     # Wait for message
+    logger.info(f"INTEGRATION TEST: Waiting for message_received event")
     message_received.wait(timeout=5)
     
     # Check message
@@ -340,4 +361,69 @@ def test_integration_mqtt_publish_subscribe():
     assert received_payload["test"] == test_payload["test"]
     
     # Clean up
-    handler.disconnect() 
+    handler.disconnect()
+
+
+@pytest.mark.integration
+def test_simple_mqtt_pub_sub():
+    """Simplified integration test using direct paho-mqtt client to validate broker connectivity"""
+    # Skip if integration tests are not enabled
+    if os.getenv("SKIP_INTEGRATION_TESTS", "true").lower() == "true":
+        pytest.skip("Skipping integration test")
+    
+    # Message received flag and storage
+    message_received = threading.Event()
+    received_data = {'topic': None, 'payload': None}
+    
+    # Message callback
+    def on_message(client, userdata, msg):
+        logger.info(f"Received message on topic {msg.topic}")
+        received_data['topic'] = msg.topic
+        received_data['payload'] = msg.payload
+        message_received.set()
+    
+    # Connect callback
+    def on_connect(client, userdata, flags, rc):
+        logger.info(f"Connected with result code {rc}")
+        if rc == 0:
+            # Subscribe on connect
+            client.subscribe("test/simple")
+    
+    # Create a client
+    client = mqtt.Client(CallbackAPIVersion.VERSION1, client_id="simple_test_client")
+    client.on_connect = on_connect
+    client.on_message = on_message
+    
+    # Connect
+    try:
+        client.connect(settings.MQTT_BROKER_HOST, settings.MQTT_BROKER_PORT, 60)
+        client.loop_start()
+        
+        # Wait for connection and subscription
+        time.sleep(2)
+        
+        # Create test message
+        test_message = json.dumps({"test": "simple", "timestamp": time.time()})
+        
+        # Publish
+        logger.info("Publishing test message")
+        client.publish("test/simple", test_message)
+        
+        # Wait for message receipt
+        result = message_received.wait(timeout=5)
+        
+        # Assert message was received
+        assert result, "Message not received"
+        assert received_data['topic'] == "test/simple", "Wrong topic received"
+        
+        # Check payload
+        try:
+            payload_data = json.loads(received_data['payload'])
+            assert payload_data.get("test") == "simple", "Wrong payload data"
+            logger.info("Test message correctly received and validated")
+        except Exception as e:
+            pytest.fail(f"Failed to parse payload: {e}")
+    finally:
+        # Clean up
+        client.loop_stop()
+        client.disconnect() 

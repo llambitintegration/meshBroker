@@ -139,7 +139,8 @@ class MessageDecoder:
             channel_key: Channel encryption key (PSK) if available
         """
         self.channel_key = channel_key
-        self.decrypt_enabled = channel_key is not None
+        # Fix: Empty key should disable decryption
+        self.decrypt_enabled = channel_key is not None and len(channel_key) > 0
         self.meshtastic_available = MESHTASTIC_AVAILABLE
 
     def decode_message(self, topic: str, payload: bytes) -> MeshtasticMessage:
