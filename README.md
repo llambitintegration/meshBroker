@@ -29,6 +29,7 @@ meshBroker/
 │   │   ├── js/              # JavaScript files
 │   │   └── css/             # CSS styles
 ├── mosquitto/               # MQTT broker configuration
+├── mosqDev/                 # CLI and development scripts
 └── mqtt_data/               # MQTT data storage
 ```
 
@@ -50,6 +51,19 @@ meshBroker/
 - MQTT topic explorer with subscription management
 - Real-time map visualization of node positions
 - Responsive, modern UI design
+
+### CLI Utility (mosqDev/meshtastic_mqtt_cli.py)
+- Send and receive MQTT messages from the command line
+- Supports broker/port/topic selection, QoS, retain, and logging
+- Usage examples:
+
+```bash
+# Send a message
+python mosqDev/meshtastic_mqtt_cli.py --mode send --topic test/topic --message "Hello Mesh!" --broker localhost --port 1883
+
+# Receive messages
+python mosqDev/meshtastic_mqtt_cli.py --mode receive --topic test/topic --broker localhost --port 1883 --verbose
+```
 
 ## Getting Started
 
@@ -89,7 +103,7 @@ node server.js
 
 ## Progress
 
-The project is actively being developed according to the checklist in `backend/checklist.md`. Key milestones achieved:
+The project is actively being developed according to the checklist in `backend/checklist.md` and `mosqDev/phase1_cli_mqtt_pubsub.md`. Key milestones achieved:
 
 - ✅ Core MQTT functionality with message persistence
 - ✅ Meshtastic integration with node management
@@ -97,6 +111,7 @@ The project is actively being developed according to the checklist in `backend/c
 - ✅ Testing and monitoring functionality
 - ✅ Initial frontend integration with WebSocket connectivity
 - ✅ Map visualization with Leaflet integration
+- ✅ CLI utility for MQTT send/receive (Phase 1)
 
 ## Next Steps
 
@@ -109,6 +124,7 @@ The following features are currently in development:
 - User authentication UI
 - Mobile responsiveness and cross-browser compatibility
 - Progressive Web App capabilities
+- CLI utility: advanced features, device management, message decryption (see mosqDev/meshtastic_mqtt_cli_roadmap.md)
 
 ## License
 

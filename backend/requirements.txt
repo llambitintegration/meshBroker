@@ -3,7 +3,7 @@ uvicorn>=0.23.2
 pydantic>=2.4.2
 pydantic-settings>=2.0.3
 python-dotenv>=1.0.0
-paho-mqtt>=2.2.1
+paho-mqtt>=1.6.1
 websockets>=11.0.3
 python-multipart>=0.0.6
 typing-extensions>=4.8.0
@@ -22,4 +22,9 @@ redis>=4.6.0
 fastapi-websocket-pubsub>=0.3.1
 # Added for monitoring and metrics
 psutil>=5.9.5
-statistics>=1.0.3.5 
+statistics>=1.0.3.5
+# Added for CLI parsing
+argparse # stdlib, but noted for clarity
+pytest>=7.0.0
+pytest-mock>=3.10.0
+pytest-cov>=4.0.0
