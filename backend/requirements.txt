@@ -15,6 +15,7 @@ folium>=0.14.0
 python-jose>=3.3.0
 passlib>=1.7.4
 bcrypt>=4.0.1
+email-validator>=2.0.0
 # Added for rate limiting
 slowapi>=0.1.7
 redis>=4.6.0

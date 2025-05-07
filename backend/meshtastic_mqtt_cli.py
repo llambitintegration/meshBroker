@@ -10,6 +10,7 @@ import os
 import sys
 import io
 from datetime import datetime
+import string
 
 # Try to import the message decoder, but make it optional
 try:
@@ -146,64 +147,105 @@ class MQTTClient:
             self.logger.error(f"Failed to publish message: {e}")
             raise
 
-    def relay_message(self, message, source_topic):
-        """
-        Relay a message to another topic based on configured relay pattern
-        
-        Args:
-            message: Message content to relay
-            source_topic: Original source topic
-        """
+    def relay_message(self, message: Any, source_topic: str):
+        """Relay a message to another topic"""
         if not self.relay_enabled or not self.relay_topic:
-            return False
-            
+            return
+        
         try:
-            # Extract information from source topic
-            parts = source_topic.split('/')
-            if len(parts) < 2:
-                self.logger.warning(f"Source topic {source_topic} does not have enough parts for relay")
-                return False
-                
-            # Extract node_id and message_type
-            node_id = parts[1] if len(parts) > 1 else "unknown"
-            message_type = parts[3] if len(parts) > 3 else parts[2] if len(parts) > 2 else "unknown"
+            # Format the message for relay based on the source and destination
+            relay_payload = None
             
-            # Format the relay topic with extracted information
-            try:
-                # Use a safe format method with fallbacks for missing placeholders
-                target_topic = self.relay_topic.format(
-                    node_id=node_id, 
-                    message_type=message_type,
-                    **{f"placeholder_{i}": f"unknown_{i}" for i in range(10)}  # Add generic placeholders
-                )
-            except KeyError as e:
-                # Fall back to a simple format if formatting fails
-                self.logger.warning(f"Invalid placeholder in relay topic: {e}")
-                target_topic = f"relay/{node_id}/{message_type}"
-            except Exception as e:
-                self.logger.error(f"Error formatting relay topic: {e}")
-                target_topic = f"relay/{node_id}/{message_type}"
-                
-            # If the message is a MeshtasticMessage, handle it appropriately
-            payload = message
-            if hasattr(message, 'to_json'):
+            # If message is a MeshtasticMessage object
+            if isinstance(message, MeshtasticMessage):
                 if self.output_format == "json":
-                    payload = message.to_json()
-                else:
-                    payload = message.get_text()
-            
-            # Publish to relay topic
-            result = self._client.publish(target_topic, payload)
-            if result.rc == mqtt.MQTT_ERR_SUCCESS:
-                self.logger.debug(f"Relayed message to {target_topic}")
-                return True
+                    relay_payload = message.to_json()
+                elif self.output_format == "raw":
+                    relay_payload = message.raw_payload
+                else:  # text format
+                    relay_payload = message.get_text()
             else:
-                self.logger.warning(f"Failed to relay message: {mqtt.error_string(result.rc)}")
-                return False
+                # Regular message, just convert to string if needed
+                if isinstance(message, (dict, list)):
+                    relay_payload = json.dumps(message)
+                elif isinstance(message, bytes):
+                    try:
+                        relay_payload = message.decode('utf-8')
+                    except UnicodeDecodeError:
+                        # If not valid UTF-8, use base64
+                        relay_payload = base64.b64encode(message).decode('utf-8')
+                else:
+                    relay_payload = str(message)
+            
+            if relay_payload:
+                # Construct the relay topic - include source topic info if relay topic doesn't specify a pattern
+                relay_topic = self.relay_topic
+                if '{' in relay_topic:
+                    try:
+                        # Extract source topic parts for formatting
+                        parts = source_topic.split('/')
+                        
+                        # Create a complete dictionary of available format variables
+                        topic_dict = {
+                            'topic': source_topic,
+                            'parts': parts
+                        }
+                        
+                        # If we have enough parts, map them to common names
+                        if len(parts) >= 3:
+                            topic_dict.update({
+                                'prefix': parts[0],
+                                'node_id': parts[1],
+                                'format': parts[2],
+                                'message_type': parts[3] if len(parts) > 3 else ''
+                            })
+                        
+                        # Custom formatter class to handle indexed array access and prevent KeyError
+                        class SafeFormatter(string.Formatter):
+                            def get_value(self, key, args, kwargs):
+                                # Handle array index access like {parts[2]}
+                                if isinstance(key, str):
+                                    # Check if this is an array access pattern
+                                    match = re.match(r'(\w+)\[(\d+)\]', key)
+                                    if match:
+                                        array_name, index = match.groups()
+                                        array = kwargs.get(array_name, [])
+                                        try:
+                                            index = int(index)
+                                            if array and isinstance(array, (list, tuple)) and 0 <= index < len(array):
+                                                return array[index]
+                                            # If index out of bounds, return empty string
+                                            return ""
+                                        except (ValueError, TypeError):
+                                            return ""
+                                
+                                # Default behavior - return the key or a fallback
+                                if key not in kwargs:
+                                    return '{' + str(key) + '}'  # Keep unknown keys as-is
+                                return kwargs[key]
+                            
+                            def format_field(self, value, format_spec):
+                                # Handle the case where value could be None or another unsupported type
+                                try:
+                                    return super().format_field(value, format_spec)
+                                except Exception:
+                                    return str(value)
+                        
+                        # Use the safe formatter
+                        formatter = SafeFormatter()
+                        relay_topic = formatter.format(self.relay_topic, **topic_dict)
+                        
+                    except Exception as e:
+                        self.logger.error(f"Failed to format relay topic: {e}")
+                        # Fall back to using relay_topic as-is
+                        relay_topic = self.relay_topic
                 
+                # Publish to relay topic
+                self.send_message(relay_topic, relay_payload)
+                self.logger.info(f"Relayed message from {source_topic} to {relay_topic}")
+        
         except Exception as e:
-            self.logger.error(f"Error relaying message: {e}")
-            return False
+            self.logger.error(f"Failed to relay message: {e}")
 
     def subscribe(self, topic: str, qos: int = 0):
         if not self.connected:

@@ -12,6 +12,7 @@
   "dependencies": {
     "@modelcontextprotocol/server-filesystem": "^2025.3.28",
     "@modelcontextprotocol/server-memory": "^0.6.2",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "fastmcp": "^1.23.2"
   }
 }

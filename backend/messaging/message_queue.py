@@ -20,6 +20,32 @@ class QueueMessage:
     retain: bool
     timestamp: float
     metadata: Dict[str, Any] = None
+    
+    # Add comparison methods to avoid the '<' not supported error
+    def __lt__(self, other):
+        if not isinstance(other, QueueMessage):
+            return NotImplemented
+        return self.timestamp < other.timestamp
+    
+    def __eq__(self, other):
+        if not isinstance(other, QueueMessage):
+            return NotImplemented
+        return self.id == other.id
+    
+    def __gt__(self, other):
+        if not isinstance(other, QueueMessage):
+            return NotImplemented
+        return self.timestamp > other.timestamp
+    
+    def __le__(self, other):
+        if not isinstance(other, QueueMessage):
+            return NotImplemented
+        return self.timestamp <= other.timestamp
+    
+    def __ge__(self, other):
+        if not isinstance(other, QueueMessage):
+            return NotImplemented
+        return self.timestamp >= other.timestamp
 
 
 class MessageQueue:

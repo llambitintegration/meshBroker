@@ -127,6 +127,9 @@ def test_relay_message_complex_formatting(mock_mqtt_client, mock_logger):
     )
     client.connect()
     
+    # Replace the client's mqtt client with our mock
+    client._mqtt_client = mock_mqtt_client
+    
     # Test with a source topic that has expected parts
     source_topic = "msh/node123/json/text"
     
@@ -148,16 +151,21 @@ def test_relay_message_invalid_format(mock_mqtt_client, mock_logger):
     )
     client.connect()
     
+    # Replace the client's mqtt client with our mock
+    client._mqtt_client = mock_mqtt_client
+    
     # Test with a source topic
     source_topic = "msh/node123/json/text"
     
     # Call relay method (should not crash despite invalid format)
     client.relay_message("Test message", source_topic)
     
-    # Should fall back to using the relay topic as-is
+    # Verify publish was called
     mock_mqtt_client.publish.assert_called_once()
     args, _ = mock_mqtt_client.publish.call_args
-    assert args[0] == "relay/{invalid_key}/{message_type}"
+    
+    # The SafeFormatter should preserve the unknown placeholder and replace known ones
+    assert args[0] == "relay/{invalid_key}/text"
 
 def test_relay_different_message_types(mock_mqtt_client, mock_logger):
     """Test relaying different message types"""

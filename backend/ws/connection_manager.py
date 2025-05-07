@@ -689,4 +689,12 @@ class ConnectionManager:
             if conn_info.is_authenticated and conn_info.user_id == user_id:
                 connections.append(conn_info)
         
-        return connections 
+        return connections
+    
+    def get_connection_id(self) -> str:
+        """Generate a new connection ID"""
+        return str(uuid.uuid4())
+        
+    def get_connection(self, connection_id: str):
+        """Get a connection by ID"""
+        return self.active_connections.get(connection_id) 
